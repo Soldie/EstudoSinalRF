@@ -9,7 +9,9 @@ using namespace std;
 
 #include "cinder/audio/Buffer.h"
 #include "cinder/audio/dsp/RingBuffer.h"
-
+#include <random>
+#include <stdexcept>
+#include "cinder/Unicode.h"
 
 namespace RF
 {
@@ -113,6 +115,14 @@ namespace RF
 			console() << endl;
 		};
 
+		void AplicarRuido(vector<float>& vec)
+		{
+			static random_device ro;
+			static default_random_engine re;
+			static uniform_real_distribution<float> rd(-1.0f, 1.0f);
+			for_each(vec.begin(), vec.end(), [&](float& v){v = (float)((int)(v + rd(re) * 0.1f));});
+		}
+
 		namespace Padroes{
 			vector<float> GerarModelo1(){
 				vector<float> keySignalSamples(32, 0.0f);
@@ -143,29 +153,36 @@ namespace RF
 	{
 	private:
 
-		float				mLevelHi;
-		float				mLevelLo;
-		float				mLevelMean;
-
 		bool				mModelCompare = false;
 		bool				mModelMatching = false;
 		size_t				mModelOffset = 0;
 		audio::Buffer		mModelSignal;
 
-		int					mSwitchState = 0;
+		int					mEdgeState = 0;
 		array<size_t, 2>	mLevelCount;
 		array<float, 2>		mLevelDelay;
 		
-		bool				mTrigger;
+		bool				mEdgeFound;
 		bool				mBeginFill;
+
+	private:
+
+		float mLevelHi, mLevelLo, mLevelMean;
+
+		void setEdgeLevels(float hi, float lo)
+		{
+			mLevelHi	= hi;
+			mLevelLo	= lo;
+			mLevelMean	= hi + (lo - hi) / 2.0f;
+		}
 
 	public:
 
 		//HSyncDetector(VideoDecoderNode* vd) : Detector(vd)
 
 		HSyncDetector()
-			: mTrigger(false)
-			, mSwitchState(0)
+			: mEdgeFound(false)
+			, mEdgeState(0)
 			, mModelOffset(0)
 			, mModelCompare(false)
 			, mModelMatching(false)
@@ -174,9 +191,7 @@ namespace RF
 
 		void initialize()
 		{	
-			mLevelHi	= 1.0f;
-			mLevelLo	= 0.0f;
-			mLevelMean	= (mLevelHi - mLevelLo) / 2.0f;
+			setEdgeLevels(1.0f, 0.0f);
 
 			mModelSignal = audio::Buffer(32u);
 			vector<float> keySignalSamples = Teste::Padroes::GerarModelo2();
@@ -195,10 +210,10 @@ namespace RF
 
 			for (int i = 0; i < buffer->getNumFrames(); i++)
 			{
-				float& currentSample = ch0[i];
+				float& inputSample = ch0[i];
 
 				if (mBeginFill){
-					ld0 = ld1 = currentSample;
+					ld0 = ld1 = inputSample;
 					mBeginFill = false;
 				}
 				else{
@@ -206,9 +221,9 @@ namespace RF
 					// -1 = transicao 1.0 -> 0.0
 					// +1 = transicao 0.0 -> 1.0
 					//  0 = nenhuma
-					ld0 = currentSample;
-					mTrigger = ld0 != ld1;
-					mSwitchState = !mTrigger ? 0 : (ld0 < mLevelMean ? -1 : 1); // relativo a idéia (abaixo de levelMean, acima de mLevelMean)	
+					ld0 = inputSample;
+					mEdgeFound = ld0 != ld1; //= min(max(ld0, mLevelLo), mLevelHi) != min(max(ld1, mLevelLo), mLevelHi);
+					mEdgeState = mEdgeFound ? (ld0 < mLevelMean ? -1 : 1) : 0; // relativo a idéia (abaixo de levelMean, acima de mLevelMean)	
 					ld1 = ld0;
 				}
 
@@ -219,29 +234,51 @@ namespace RF
 				//   a amostra do proximo laço tera atribuição de valor 1.0.
 				// - Encerra-se a comparação.
 
-				if (!mModelCompare && mSwitchState == -1){
-					mModelOffset = 0;
-					mModelCompare = true;
-					buffer->getChannel(1)[i] = 1.0f;
+				if (!mModelCompare && mEdgeState == -1){
+					mModelOffset	= 0;
+					mModelCompare	= true;
+					buffer->getChannel(2)[i] = 1.0f;
 				}
+
+				//////////////////////////////////////////////////////////////////
+				//
+				// Periodo de sinal retangular 
+				//
+				// n-x     -1   0      n+x
+				// |________|___|________|
+				// |        |\  |        |
+				// |--------|-\-|--------| <- limiar média entre
+				// |________|__\|________|    sinal alto e sinal baixo.
+				//
+				//  Nota: transição de um sinal retangular no
+				//  domínio analógico não é uma transição perfeita!
+				//
+				//////////////////////////////////////////////////////////////////
+
+				//buffer->getChannel(1)[i] = 0.1f;
 
 				if (mModelCompare){
 					
+					float modelSample = mModelSignal.getChannel(0)[mModelOffset];
+
 					if (mModelMatching){
 						buffer->getChannel(3)[i] = 1.0f;
-						//TODO: deixar preencher mais amostras para dar garantia
-						//de que as outras partes do sistema detectem o sinal.
+						//TODO: deixar preencher mais amostras para deixar claro as 
+						//outras partes do sistema no momento de detectar o sinal.
 						mModelCompare = mModelMatching = false;
 					}
-					//FIXME: aplicar margem de erro na comparação devido as imperfeições no domínio analógico.
-					else if (currentSample == mModelSignal.getChannel(0)[mModelOffset]){
+					else if (inputSample == modelSample){
+						//FIXME: aplicar margem de erro no momento da comparação
+						//para evitar menos problemas devido a imperfeições misturadas
+						//no sinal.
+						buffer->getChannel(1)[i] = modelSample == 0.0f ? 0.25f : modelSample;
 						if (++mModelOffset >= mModelSignal.getNumFrames()){
 							mModelMatching = true;
 						}
 					}
 					else{
 						mModelCompare = false;
-						buffer->getChannel(2)[i] = 1.0f;
+						buffer->getChannel(4)[i] = 1.0f;
 					}
 				}				
 			}
@@ -252,6 +289,132 @@ namespace RF
 }
 
 
+
+
+
+
+
+
+
+class AudioBufferGraph
+{
+private:
+
+	audio::Buffer		mAudioBuffer;
+	gl::Texture2dRef	mGraphTexture;
+	vector<string>	mLabels;
+
+	void initialize()
+	{
+		gl::Texture2d::Format texFormat;
+		texFormat.internalFormat(GL_R32F);
+		texFormat.dataType(GL_FLOAT);
+		texFormat.minFilter(GL_NEAREST);
+		texFormat.magFilter(GL_NEAREST);
+		texFormat.mipmap();
+
+		mGraphTexture = gl::Texture2d::create(
+			nullptr,
+			GL_RED,
+			mAudioBuffer.getNumFrames(),
+			mAudioBuffer.getNumChannels(),
+			texFormat);
+	}
+
+public:
+
+	AudioBufferGraph() = default;
+
+	AudioBufferGraph(const AudioBufferGraph& copy)
+	{
+		mAudioBuffer = copy.mAudioBuffer;
+		mGraphTexture = copy.mGraphTexture;
+		mLabels = copy.mLabels;
+	}
+
+	AudioBufferGraph(audio::Buffer& buffer, vector<string>& labels)
+		: mAudioBuffer(buffer)
+		, mLabels(buffer.getNumChannels(), "Channel")
+	{
+		initialize();
+		update(buffer);
+		size_t numFrames = min(mLabels.size(), labels.size());
+		copy(labels.begin(), labels.begin() + numFrames, mLabels.begin());
+	}
+
+	void update(audio::Buffer& other)
+	{
+		if (mAudioBuffer.isEmpty() || other.isEmpty()) return;
+
+		mAudioBuffer.copy(other);
+
+		mGraphTexture->update(
+			mAudioBuffer.getData(),
+			GL_RED,
+			GL_FLOAT,
+			0,
+			mAudioBuffer.getNumFrames(),
+			mAudioBuffer.getNumChannels());
+	}
+
+	void draw(Rectf& windowBounds)
+	{
+		AppBase& app = *App::get();
+
+		gl::Texture2dRef& tex = mGraphTexture;
+
+		if (mGraphTexture){
+			
+			gl::pushMatrices();
+			gl::setMatricesWindow(app.getWindowSize(), false);
+			gl::draw(tex, windowBounds);
+			gl::popMatrices();
+
+			gl::color(Color::white());
+
+			try
+			{
+				//TODO: Usar shader de grade
+				vec2 stepPer = vec2(windowBounds.getSize()) / vec2(tex->getSize());
+				{
+					gl::ScopedColor scpColor(Color::black());
+					vec2 nextPos = windowBounds.getUpperLeft();
+					for (int i = 0; i < mAudioBuffer.getNumFrames(); i++){
+						gl::drawLine(vec2(nextPos.x, windowBounds.getY1()), vec2(nextPos.x, windowBounds.getY2()));
+						nextPos.x += stepPer.x;
+					}
+				}
+				{
+					gl::ScopedColor scpColor(Color::white());
+					vec2 nextPos = windowBounds.getUpperLeft();
+					for (auto str = mLabels.begin(); str != mLabels.end(); str++){
+						gl::drawLine(vec2(windowBounds.getX1(), nextPos.y), vec2(windowBounds.getX2(), nextPos.y));
+						gl::drawString(*str, nextPos);
+						nextPos.y += stepPer.y;
+					}
+				}
+			}
+			catch (...)
+			{
+				std::exception_ptr eptr = std::current_exception(); // capture
+				
+				try {
+					if (eptr) {
+						std::rethrow_exception(eptr);
+					}
+				}
+				catch (const std::exception& e) {
+					app.console() << __FUNCTION__ << ": " << e.what() << endl;
+				}
+			}
+		}
+
+		gl::drawStrokedRect(windowBounds);
+	}
+};
+#include <codecvt>
+#include <locale>
+
 class EstudoSinalRFApp : public App {
   public:
 	void setup() override;
@@ -259,30 +422,55 @@ class EstudoSinalRFApp : public App {
 	void update() override;
 	void draw() override;
 	RF::HSyncDetector mHSyncDetector;
+	AudioBufferGraph mAudioBufferGraph;
 };
-
 
 void EstudoSinalRFApp::setup()
 {
+	//Casos de teste:
+	//- exatidão do algoritmos
+	//- entrada com imperfeições (deverá não afetar a detecção)
+	//- entrada com padrão levemente modificado (deverá dar erro)
+
+	// sinal
+	// comparação inicio
+	// comparação erro
+	// comparação fim
+	// proximidade da linear
+
 	audio::Buffer testBuffer = audio::Buffer(64u, 1u);
 	{
 		vector<float> keySignalSamples = RF::Teste::Padroes::GerarModelo2();
+		//RF::Teste::AplicarRuido(keySignalSamples);
 		float* ptr = testBuffer.getChannel(0);
 		std::fill(ptr, ptr + testBuffer.getSize(), 1.0f);
 		std::copy(keySignalSamples.begin(), keySignalSamples.end(), ptr + 14);
 	}
 
-	RF::Teste::ImprimirBufferAudio(testBuffer);
+	//RF::Teste::ImprimirBufferAudio(testBuffer);
 
-	audio::Buffer hSyncBuffer(testBuffer.getNumFrames(), 4u);
+	audio::Buffer hSyncBuffer(testBuffer.getNumFrames(), 8u);
 	{
 		hSyncBuffer.copyChannel(0u, testBuffer.getChannel(0));
 		mHSyncDetector.initialize();
 		mHSyncDetector.process(&hSyncBuffer);
 	}
 
-	RF::Teste::ImprimirBufferAudio(hSyncBuffer);
+	//RF::Teste::ImprimirBufferAudio(hSyncBuffer);
+
+
+	mAudioBufferGraph = AudioBufferGraph(hSyncBuffer, vector<string>
+	{
+		// ATENÇÃO: Não usar caracteres unicode ou o programa quebrará
+		"Entrada",
+		"Modelo",
+		"Comparacao, inicio",
+		"Comparacao, identico",
+		"Comparacao, diferente",
+	});
 }
+
+
 
 void EstudoSinalRFApp::mouseDown( MouseEvent event )
 {
@@ -294,10 +482,11 @@ void EstudoSinalRFApp::update()
 
 void EstudoSinalRFApp::draw()
 {
-	gl::clear( Color( 0, 0, 0 ) ); 
+	gl::clear();
+	mAudioBufferGraph.draw(Rectf(getWindowBounds()));
 }
 
-CINDER_APP(EstudoSinalRFApp, RendererGl(RendererGl::Options().msaa(4)), [&](App::Settings *settings)
+CINDER_APP(EstudoSinalRFApp, RendererGl(RendererGl::Options()), [&](App::Settings *settings)
 {
 	settings->setConsoleWindowEnabled();
 	//settings->setFrameRate(15.0f);
