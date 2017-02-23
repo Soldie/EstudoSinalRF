@@ -100,27 +100,64 @@ namespace RF
 
 	*/
 
+	namespace Teste
+	{
+		void ImprimirBufferAudio(audio::Buffer& b){
+			for (unsigned ch = 0u; ch < b.getNumChannels(); ch++){
+				float* off = b.getChannel(ch);
+				float* end = off + b.getNumFrames();
+				console() << "Channel" << ch << " [";
+				while (off != end) console() << *off++;
+				console() << "]" << endl;
+			}
+			console() << endl;
+		};
 
+		namespace Padroes{
+			vector<float> GerarModelo1(){
+				vector<float> keySignalSamples(32, 0.0f);
+				auto off = keySignalSamples.begin();
+				fill(off, off + 8, 0.0f); off += 8;
+				fill(off, off + 8, 1.0f); off += 8;
+				fill(off, off + 4, 0.0f); off += 4;
+				fill(off, off + 4, 1.0f); off += 4;
+				fill(off, off + 8, 0.0f);
+				return keySignalSamples;
+			}
+			vector<float> GerarModelo2(){
+				vector<float> keySignalSamples(32, 0.0f);
+				auto off = keySignalSamples.begin();
+				fill(off, off + 8, 0.0f); off += 8;
+				fill(off, off + 8, 1.0f); off += 8;
+				fill(off, off + 2, 0.0f); off += 2;
+				fill(off, off + 2, 1.0f); off += 2;
+				fill(off, off + 2, 0.0f); off += 2;
+				fill(off, off + 2, 1.0f); off += 2;
+				fill(off, off + 8, 0.0f);
+				return keySignalSamples;
+			}
+		}
+	}
 
 	class HSyncDetector // : public Detector
 	{
 	private:
 
-		float mLevelHi;
-		float mLevelLo;
-		float mLevelMean;
+		float				mLevelHi;
+		float				mLevelLo;
+		float				mLevelMean;
 
-		bool mKeyCompare = false;
-		bool mKeyMatching = false;
-		size_t mKeyOffset = 0;
-		audio::Buffer mKeySignal;
+		bool				mModelCompare = false;
+		bool				mModelMatching = false;
+		size_t				mModelOffset = 0;
+		audio::Buffer		mModelSignal;
 
-		int	mSwitchState = 0;
-		array<size_t, 2> mLevelCount;
-		array<float, 2> mLevelDelay;
+		int					mSwitchState = 0;
+		array<size_t, 2>	mLevelCount;
+		array<float, 2>		mLevelDelay;
 		
-		bool mTrigger;
-		bool mBeginFill;
+		bool				mTrigger;
+		bool				mBeginFill;
 
 	public:
 
@@ -129,9 +166,9 @@ namespace RF
 		HSyncDetector()
 			: mTrigger(false)
 			, mSwitchState(0)
-			, mKeyOffset(0)
-			, mKeyCompare(false)
-			, mKeyMatching(false)
+			, mModelOffset(0)
+			, mModelCompare(false)
+			, mModelMatching(false)
 			, mBeginFill(true)
 		{}
 
@@ -141,9 +178,9 @@ namespace RF
 			mLevelLo	= 0.0f;
 			mLevelMean	= (mLevelHi - mLevelLo) / 2.0f;
 
-			mKeySignal = audio::Buffer(10u);
-			vector<float> keySignalSamples(mKeySignal.getNumFrames(), 0.0f);
-			copy(keySignalSamples.begin(), keySignalSamples.end(), mKeySignal.getChannel(0));
+			mModelSignal = audio::Buffer(32u);
+			vector<float> keySignalSamples = Teste::Padroes::GerarModelo2();
+			copy(keySignalSamples.begin(), keySignalSamples.end(), mModelSignal.getChannel(0));
 
 			mLevelDelay.at(0) = 0.0f;
 			mLevelDelay.at(1) = 0.0f;
@@ -156,8 +193,6 @@ namespace RF
 			float &ld0 = mLevelDelay.at(0);
 			float &ld1 = mLevelDelay.at(1);
 
-			//FIXME: tempo de aquecimento (caso de encontra nivel alto no buffer ao começo)
-
 			for (int i = 0; i < buffer->getNumFrames(); i++)
 			{
 				float& currentSample = ch0[i];
@@ -165,59 +200,50 @@ namespace RF
 				if (mBeginFill){
 					ld0 = ld1 = currentSample;
 					mBeginFill = false;
-					currentSample = 0.0f;
-					continue;
+				}
+				else{
+					// Codigo de transição: 
+					// -1 = transicao 1.0 -> 0.0
+					// +1 = transicao 0.0 -> 1.0
+					//  0 = nenhuma
+					ld0 = currentSample;
+					mTrigger = ld0 != ld1;
+					mSwitchState = !mTrigger ? 0 : (ld0 < mLevelMean ? -1 : 1); // relativo a idéia (abaixo de levelMean, acima de mLevelMean)	
+					ld1 = ld0;
 				}
 
-				// Codigo de transição: 
-				// -1 = transicao 1.0 -> 0.0
-				// +1 = transicao 0.0 -> 1.0
-				//  0 = nenhuma
-
-				//FIXME: resetar caso anteriormente for detectado
-
-				ld0 = currentSample;
-				mTrigger = ld0 != ld1;
-				mSwitchState = !mTrigger ? 0 : (ld0 < mLevelMean ? -1 : 1); // relativo a idéia (abaixo de levelMean, acima de mLevelMean)	
-				ld1 = ld0;
-
-				////////////////////////////////////////////////////////////
-
 				// Rotina:
-				// - Ao identificar transição alto-baixo, a rotina de comparação é ativada.
-				// - Compara sinal da entrada com sinal modelo
+				// - Rotina de comparação é ativada ao detectar uma transicao alta-baixa
+				// - Compara sinal da entrada com sinal modelo/chave
 				// - Caso sinal comparado desde a transicao forem identicos ao modelo, 
 				//   a amostra do proximo laço tera atribuição de valor 1.0.
 				// - Encerra-se a comparação.
 
-				//FIXME: desativar após anteriormente detectado
-				if (mSwitchState == -1){
-					mKeyCompare = true;
-					mKeyOffset = 0;
+				if (!mModelCompare && mSwitchState == -1){
+					mModelOffset = 0;
+					mModelCompare = true;
+					buffer->getChannel(1)[i] = 1.0f;
 				}
 
-				if (mKeyCompare){
-					if (mKeyMatching){
-						currentSample = 1.0f;
-						mKeyMatching = mKeyCompare = false;
+				if (mModelCompare){
+					
+					if (mModelMatching){
+						buffer->getChannel(3)[i] = 1.0f;
+						//TODO: deixar preencher mais amostras para dar garantia
+						//de que as outras partes do sistema detectem o sinal.
+						mModelCompare = mModelMatching = false;
 					}
-					else if (currentSample != mKeySignal.getChannel(0)[mKeyOffset++]){
-						mKeyMatching = false;
+					//FIXME: aplicar margem de erro na comparação devido as imperfeições no domínio analógico.
+					else if (currentSample == mModelSignal.getChannel(0)[mModelOffset]){
+						if (++mModelOffset >= mModelSignal.getNumFrames()){
+							mModelMatching = true;
+						}
 					}
-					else if (mKeyOffset >= mKeySignal.getNumFrames()){
-						mKeyMatching = true;
+					else{
+						mModelCompare = false;
+						buffer->getChannel(2)[i] = 1.0f;
 					}
-					/*
-					if (mKeyMatching){
-						currentSample = 1.0f;
-						mKeyOffset = 0;
-						mKeyMatching = mKeyCompare = false;
-					}
-					*/
-				}
-				else{
-					currentSample = 0.0f;
-				}
+				}				
 			}
 		}
 	};
@@ -235,30 +261,27 @@ class EstudoSinalRFApp : public App {
 	RF::HSyncDetector mHSyncDetector;
 };
 
+
 void EstudoSinalRFApp::setup()
 {
-	function<void(audio::Buffer&)> printBuffer = [&](audio::Buffer& b){
-		for (int ch = 0; ch < b.getNumChannels(); ch++){
-			float* off = b.getChannel(ch);
-			float* end = off + b.getNumFrames();
-			console() << "Channel" << ch << " [";
-			while (off != end) console() << *off++;
-			console() << "]" << endl;
-		}
-		console() << endl;
-	};
+	audio::Buffer testBuffer = audio::Buffer(64u, 1u);
+	{
+		vector<float> keySignalSamples = RF::Teste::Padroes::GerarModelo2();
+		float* ptr = testBuffer.getChannel(0);
+		std::fill(ptr, ptr + testBuffer.getSize(), 1.0f);
+		std::copy(keySignalSamples.begin(), keySignalSamples.end(), ptr + 14);
+	}
 
-	audio::Buffer testBuffer = audio::Buffer(64u,1u);
-	vector<float> keySignalSamples(testBuffer.getNumFrames(), 0.0f);
-	fill(keySignalSamples.begin(), keySignalSamples.begin() + 5, 1.0f); 
-	fill(keySignalSamples.begin() + 15, keySignalSamples.end(), 1.0f);
-	copy(keySignalSamples.begin(), keySignalSamples.end(), testBuffer.getChannel(0));
-	printBuffer(testBuffer);
+	RF::Teste::ImprimirBufferAudio(testBuffer);
 
-	audio::Buffer hSyncBuffer(testBuffer);
-	mHSyncDetector.initialize();
-	mHSyncDetector.process(&hSyncBuffer);
-	printBuffer(hSyncBuffer);
+	audio::Buffer hSyncBuffer(testBuffer.getNumFrames(), 4u);
+	{
+		hSyncBuffer.copyChannel(0u, testBuffer.getChannel(0));
+		mHSyncDetector.initialize();
+		mHSyncDetector.process(&hSyncBuffer);
+	}
+
+	RF::Teste::ImprimirBufferAudio(hSyncBuffer);
 }
 
 void EstudoSinalRFApp::mouseDown( MouseEvent event )
