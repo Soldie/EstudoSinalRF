@@ -155,36 +155,52 @@ namespace RF
 	{
 	private:
 
-		bool				mModelCompare = false;
-		bool				mModelMatching = false;
-		size_t				mModelOffset = 0;
+		bool				mModelCompare;
+		bool				mModelMatching;
+		float				mModelMatchFactor;
+		size_t				mModelOffset;
 		audio::Buffer		mModelSignal;
 
-		int					mEdgeState = 0;
-		array<size_t, 2>	mLevelCount;
+		float				mLevelHi;
+		float				mLevelLo;
+		float				mLevelMean;
+		//array<size_t, 2>	mLevelCount;
 		array<float, 2>		mLevelDelay;
 
-		bool				mEdgeFound;
-		bool				mFirstLoop;
+		enum EdgeState{EDGE_NONE = 0, EDGE_HIGH_LOW = -1, EDGE_LOW_HIGH = 1};
+		int	mEdgeState;
+		bool mEdgeFound;
+		bool mFirstLoop;
 
 	private:
 
-		float mLevelHi, mLevelLo, mLevelMean;
-
-		float clamp(float x, float a, float b){
+		float sampleClamp(float x, float a, float b){
 			return min(max(x, a), b);
 		}
 
-		float mapValue(float x, float a1, float a2, float b1, float b2){
-			return clamp((x - a1) * (b2 - b1) / (a2 - a1) + b1, b1, b2);
+		float sampleRemap(float x, float a1, float a2, float b1, float b2){
+			return sampleClamp((x - a1) * (b2 - b1) / (a2 - a1) + b1, b1, b2);
 		}
 
-		float calcEdgeIntegrity(float x){
-			return abs(mapValue(x, mLevelHi, mLevelLo, -1.0, 1.0));
+		float sampleNormalize(float x){
+			return sampleRemap(x, mLevelHi, mLevelLo, -1.0f, 1.0f);
 		}
 
-		float normalizeLevel(float x){
-			return mapValue(x, mLevelHi, mLevelLo, -1.0f, 1.0f);
+		float sampleCompareProgress(){
+			return sampleClamp(mModelOffset / static_cast<float>(mModelSignal.getNumFrames()), 0.0f, 1.0f);
+		}
+
+		float sampleQuality(float input){
+			return abs(sampleNormalize(input));
+		}
+
+		bool sampleModelMatch(float input){
+			// Nota: aceitar uma margem minima de 50% de aceitação
+			// devido a imperfeições misturadas no sinal analógico.
+			float model = mModelSignal.getChannel(0)[mModelOffset];
+			input = sampleNormalize(input);
+			model = sampleNormalize(model) * mModelMatchFactor;
+			return abs(input) > abs(model) && signbit(input) == signbit(model);
 		}
 
 		void setEdgeLevels(float hi, float lo){
@@ -193,80 +209,69 @@ namespace RF
 			mLevelMean = hi + (lo - hi) / 2.0f;
 		}
 
-		bool checkModelMatch(float input){
-			float model = mModelSignal.getChannel(0)[mModelOffset];
-			// Nota: aceitar uma margem minima de 50% de integridade
-			// devido a imperfeições misturadas no sinal analógico.
-			input = normalizeLevel(input);
-			model = normalizeLevel(model) * 0.5f;
-			return abs(input) > abs(model) && signbit(input) == signbit(model);
-		}
-
 	public:
 
 		//HSyncDetector(VideoDecoderNode* vd) : Detector(vd)
 
 		HSyncDetector()
-			: mEdgeFound(false)
-			, mEdgeState(0)
-			, mModelOffset(0)
-			, mModelCompare(false)
+			: mModelCompare(false)
 			, mModelMatching(false)
+			, mModelMatchFactor(0.5f)
+			, mModelOffset(0)
+			, mEdgeFound(false)
+			, mEdgeState(0)
 			, mFirstLoop(true)
 		{}
 
 		void initialize()
 		{
-			setEdgeLevels(1.0f, 0.0f);
-
 			mModelSignal = audio::Buffer(32u);
-			vector<float> keySignalSamples = Teste::Padroes::GerarModelo2();
-			copy(keySignalSamples.begin(), keySignalSamples.end(), mModelSignal.getChannel(0));
+			vector<float> model = Teste::Padroes::GerarModelo2();
+			copy(model.begin(), model.end(), mModelSignal.getChannel(0));
 
-			mLevelDelay.at(0) = 0.0f;
-			mLevelDelay.at(1) = 0.0f;
+			setEdgeLevels(1.0f, 0.0f);
 		}
 
 		void process(audio::Buffer* buffer)
 		{
-			float* ch0 = buffer->getChannel(0);
-
 			float &ld0 = mLevelDelay.at(0);
 			float &ld1 = mLevelDelay.at(1);
 
+			for (unsigned c = 1u; c < buffer->getNumChannels(); c++){
+				buffer->zeroChannel(c);
+			}
+
 			for (unsigned i = 0u; i < buffer->getNumFrames(); i++)
 			{
-				float& inputSample = ch0[i];
-
-				// Codigo de transição: 
-				// -1 = transicao 1.0 -> 0.0
-				// +1 = transicao 0.0 -> 1.0
-				//  0 = nenhuma
+				float& inputSample = buffer->getChannel(0)[i];
 
 				if (mFirstLoop){
+					//TODO: intervalo de aquecimento por algumas amostras.
 					ld0 = ld1 = inputSample;
 					mFirstLoop = false;
 				}
 				else{
 					ld0 = inputSample;
 					mEdgeFound = ld0 != ld1; //= min(max(ld0, mLevelLo), mLevelHi) != min(max(ld1, mLevelLo), mLevelHi);
-					mEdgeState = mEdgeFound ? (ld0 < mLevelMean ? -1 : 1) : 0; // relativo a idéia (abaixo de levelMean, acima de mLevelMean)	
+
+					if (!mEdgeFound){
+						mEdgeState = EdgeState::EDGE_NONE;
+					}
+					else if (ld0 < mLevelMean){
+						mEdgeState = EdgeState::EDGE_HIGH_LOW;
+					}
+					else{
+						mEdgeState = EdgeState::EDGE_LOW_HIGH;
+					}
+
 					ld1 = ld0;
 				}
 
-				// Rotina:
-				// - Rotina de comparação é ativada ao detectar uma transicao alta-baixa
-				// - Compara sinal da entrada com sinal modelo/chave
-				// - Caso sinal comparado desde a transicao forem identicos ao modelo, 
-				//   a amostra do proximo laço tera atribuição de valor 1.0.
-				// - Encerra-se a comparação.
-
-				if (!mModelCompare && mEdgeState == -1){
-					mModelOffset = 0;
-					mModelCompare = true;
-					buffer->getChannel(4)[i] = 1.0f;
-				}
-
+				// Codigo de transição: 
+				// -1 = transicao 1.0 -> 0.0
+				// +1 = transicao 0.0 -> 1.0
+				//  0 = nenhuma
+				//
 				//////////////////////////////////////////////////////////////////
 				//
 				// Periodo de sinal retangular 
@@ -282,26 +287,40 @@ namespace RF
 				//
 				//////////////////////////////////////////////////////////////////
 
-				//buffer->getChannel(1)[i] = 0.1f;
+				// Rotina:
+				// - Rotina de comparação é ativada ao detectar uma transicao alta-baixa
+				// - Compara sinal da entrada com sinal modelo/chave
+				// - Caso sinal comparado desde a transicao forem identicos ao modelo, 
+				//   a amostra do proximo laço tera atribuição de valor 1.0.
+				// - Encerra-se a comparação.
+
+				if (!mModelCompare && mEdgeState == EdgeState::EDGE_HIGH_LOW){
+					mModelCompare	= true;
+				}
 
 				if (mModelCompare){
 					if (mModelMatching){
 						// TODO: ter opção de preencher mais amostras para deixar claro as 
 						// outras partes do sistema no momento de detectar o sinal.
 						buffer->getChannel(5)[i] = 1.0f;
-						mModelCompare = mModelMatching = false;
+						mModelOffset	= 0;
+						mModelCompare	= false;
+						mModelMatching	= false;
 					}
-					else if (checkModelMatch(inputSample)){
-						buffer->getChannel(1)[i] = mModelSignal.getChannel(0)[mModelOffset];// == 0.0f ? 0.25f : modelSample;
-						buffer->getChannel(2)[i] = mModelOffset / static_cast<float>(mModelSignal.getNumFrames());
-						buffer->getChannel(3)[i] = calcEdgeIntegrity(inputSample);
+					else if (sampleModelMatch(inputSample)){
+						buffer->getChannel(1)[i] = mModelSignal.getChannel(0)[mModelOffset];
+						buffer->getChannel(2)[i] = sampleCompareProgress();
+						buffer->getChannel(3)[i] = sampleQuality(inputSample);
+						buffer->getChannel(4)[i] = 1.0f;
 						if (++mModelOffset >= mModelSignal.getNumFrames()){
 							mModelMatching = true;
 						}
 					}
 					else{
-						mModelCompare = false;
 						buffer->getChannel(6)[i] = 1.0f;
+						mModelOffset	= 0;
+						mModelCompare	= false;
+						mModelMatching	= false;
 					}
 				}
 			}
