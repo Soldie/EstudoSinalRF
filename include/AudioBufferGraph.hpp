@@ -17,6 +17,7 @@ private:
 	vector<gl::VboRef>		mBuf;
 	vector<gl::GlslProgRef> mPrg;
 	gl::Texture2dRef		mGraphTexture;
+	Font					mFont;
 
 	void initialize()
 	{
@@ -77,80 +78,138 @@ private:
 			uniform vec2 iChnRes;
 			uniform vec2 iFboRes;
 			out vec4 fragOut;
+
+			const float PI = atan(1.0)*4.0;
+
+			float remap(float value, float smin, float smax, float dmin, float dmax)
+			{
+				return (value - smin) * (dmax - dmin) / (smax - smin) + dmin;
+			}
+
+			float coserp(float a, float b, float x)
+			{
+				return mix(a, b, 0.5 + 0.5*cos(PI + PI*x));
+			}
+
+			float calcLineBase(float res_fbo, float res_chn, float map_value, vec2 map_range, bool wrap)
+			{
+				map_value = remap(map_value, 0.0, 1.0, map_range[0], map_range[1]);
+
+				float line;
+
+				if(wrap)
+					line = 1.0 - abs(-1.0 + 2.0 * fract(map_value));
+				else
+					line = abs(-1.0 + 2.0 * map_value);
+
+				float dist = (res_chn / res_fbo) * 2.0 * (abs(map_range[0]) + abs(map_range[1]));
+
+				return smoothstep(dist + dist, 0.0, line);
+			}
+
+			float calcGridLine(float res_fbo, float res_chn, float map_value, vec2 map_range)
+			{
+				return calcLineBase(res_fbo, res_chn, map_value, map_range, true);
+			}
+
+			float calcWaveLine(float res_fbo, float res_chn, float map_value, vec2 map_range)
+			{
+				return calcLineBase(res_fbo, res_chn, map_value, map_range, false);
+			}
+
+			void viewTemplate(vec2 res_fbo, vec2 res_chn, vec2 view_id, vec2 view_uv, out vec3 color)
+			{
+				color = vec3(0.20);
+
+				//camada, padrão1
+				//color = mix(vec3(0.20), vec3(0.25), mod(view_id.x, 2.0));
+
+				//camada, degradê
+				color = mix(color*0.50, color*1.00, abs(-1.0 + 2.0 * view_uv.y));
+				//linhas, separador, bloco
+				color = mix(color, vec3(0.20), calcGridLine(res_fbo.x, res_chn.x, view_uv.x, vec2(0.0, 1.0)));
+
+				if (view_id.y != 0.0){
+					//linhas, referencia, amplitude
+					color = mix(color, vec3(0.30), calcGridLine(res_fbo.y, res_chn.y, view_uv.y, vec2(-0.5, 1.5)));
+				}
+				else{
+					//linhas, referencia, limiar
+					color += vec3(0.75,0,0) * calcWaveLine(res_fbo.y, res_chn.y, view_uv.y, vec2(-0.5, 1.5));
+					//linhas, referencia, amplitude
+					color += vec3(0,0.75,0) * calcGridLine(res_fbo.y, res_chn.y, view_uv.y, vec2(-0.5, 1.5));
+				}
+
+				//linhas, separador, faixa
+				color = mix(color, vec3(1.00), calcGridLine(res_fbo.y, res_chn.y, view_uv.y, vec2(0.0, 1.0)));
+			}
+
+			void viewWaveform(vec2 res_fbo, vec2 res_chn, vec2 view_id, vec2 view_uv, out vec3 color)
+			{
+				vec2 uv = view_id / res_chn;
+				
+				vec2 wave;
+
+				wave.x = texture2D(iChnSrc, uv).r;
+				wave.y = texture2D(iChnSrc, uv + vec2(1.0 / res_chn.x, 0.0)).r;
+
+				wave.x = remap(wave.x, 0.0, 1.0, -0.25, 0.25);
+				wave.y = remap(wave.y, 0.0, 1.0, -0.25, 0.25);
+
+				//float k = wave.x;
+				//float k = mix(wave.x, wave.y, view_uv.x);
+				float k = coserp(wave.x, wave.y, view_uv.x);
+
+				color += vec3(0.1, 1.0, 0.2) * calcWaveLine(res_fbo.y, res_chn.y, view_uv.y + k, vec2(0.0, 1.0));
+
+				color += vec3(0.1, 1.0, 0.2) * calcWaveLine(res_fbo.y, res_chn.y, view_uv.y + k, vec2(0.0, 1.0));
+			}
+
+			
 			void main()
 			{
+				//vec2 _iChnRes = vec2(iChnRes.x, 1.0);
+				vec2 _iChnRes = iChnRes;
+				vec2 _iFboRes = iFboRes;
 
-				
-				vec2 uv = gl_FragCoord.xy / iFboRes;
+				vec2 uv = gl_FragCoord.xy / _iFboRes;
+				uv.y = 1.0 - uv.y;
 
-				vec2 fboPixelStep = 1.0 / iFboRes;
-				vec2 chnPixelStep = 1.0 / iChnRes;
+				vec2 fboPixelStep = 1.0 / _iFboRes;
+				vec2 chnPixelStep = 1.0 / _iChnRes;
 
-				/////////////////////////////////////
+				vec2 view_id = floor(uv*_iChnRes);
+				vec2 view_uv = fract(uv*_iChnRes);
 
-				// Identificador por:
-				// x = amostra
-				// y = faixa
-				vec2 mask = floor(uv*iChnRes);
-
-				// Referencia para:
-				// x = alinhamento da amostra por posicao
-				// y = limite de amplitude por faixa
-				vec2 line = fract(uv * vec2(1.0, iChnRes.y));
-				line.y = -0.2 + 1.4 * line.y;
-				//line.y = (-1.0 + 2.0 * line.y) * 1.5; // amplitude entre -1.5 a +1.5
-				//line.y = line.y * 1.5; // amplitude entre 0 a 1.5
-
-				
-
-				/////////////////////////////////////
-
-				//FIXME: aspecto adaptavel relativo a resolução e fator de ampliação.
-				vec2 dist = fboPixelStep*(iChnRes*2.0);
-				vec2 grid = smoothstep(dist * 0.0, dist * 2.0, 1.0 - abs(-1.0 + 2.0 * fract(uv * iChnRes)));
-
-				/////////////////////////////////////
-
-				vec3 sSrc;
 				vec3 sDst;
-				
-				vec2 sampleUV = vec2(line.x, 1.0 - uv.y);
-				vec2 sampleOff = vec2(0, sampleUV.y);
 
-				sampleOff.x = sampleUV.x - fboPixelStep.x;
-				float s0 = texture2D(iChnSrc, sampleOff).r; // pixel n-1
+				//linhas (amplitude, e blocos (trilhas x amostras))
+				//sDst.r = calcLineBase(_iFboRes.x, _iChnRes.x, view_uv.x, vec2( 0.0, 1.0));
+				//sDst.g = calcLineBase(_iFboRes.y, _iChnRes.y, view_uv.y, vec2( 0.0, 1.0));
+				//sDst.b = calcLineBase(_iFboRes.y, _iChnRes.y, view_uv.y, vec2(-0.5, 1.5));
 
-				sampleOff.x = sampleUV.x;
-				float s1 = texture2D(iChnSrc, sampleOff).r;
+				//padrão zebra 
+				//sDst.r = mod(view_id.x, 2.0);
+				//sDst.g = mod(view_id.y, 2.0);
 
-				sampleOff.x = sampleUV.x + fboPixelStep.x;
-				float s2 = texture2D(iChnSrc, sampleOff).r;
+				//padrão xadrez 
+				//sDst.r = mod(view_id.x + mod(view_id.y, 2.0), 2.0);
+				//sDst.g = mod(view_id.y, 2.0);
 
-				vec2 k1 = line.y + vec2(-dist.y, +dist.y) * 0.0;
-				vec2 k2 = line.y + vec2(-dist.y, +dist.y) * 2.0;
+				//mapa para espaço de amostra e faixa
+				//sDst.r = view_uv.x;
+				//sDst.g = view_uv.y;
 
-				float s3 = smoothstep(k2.x, k1.x, s1) - smoothstep(k1.y, k2.y, s0);
-				float s4 = smoothstep(k2.x, k1.x, s1) - smoothstep(k1.y, k2.y, s1);
-				float s5 = smoothstep(k2.x, k1.x, s1) - smoothstep(k1.y, k2.y, s2);
-				
-				//sDst = vec3(max(max(s3,s4),s5));
 
-				vec3 color1 = vec3(0.1, 1.0, 0.4);
-				sDst = color1;
-				sDst = mix(color1 * 0.10, sDst, s4);
-				//sDst = mix(color1 * 0.08, sDst, grid.x);
-				sDst = mix(color1 * 0.50, sDst, grid.y);
+				//sDst = mix(vec3(0.20), vec3(0.25), mod(view_id.x, 2.0));
+				//sDst = mix(sDst*0.9, sDst, mod(view_id.y, 2.0));
+				//sDst.r += calcLineBase(_iFboRes.x, _iChnRes.x, view_uv.x, vec2(0.0, 1.0));
+				//sDst.g += calcLineBase(_iFboRes.y, _iChnRes.y, view_uv.y, vec2(0.0, 1.0));
+				//sDst.b += calcLineBase(_iFboRes.y, _iChnRes.y, view_uv.y, vec2(-0.5, 1.5));
 
-				/////////////////////////////////////
+				viewTemplate(_iFboRes, _iChnRes, view_id, view_uv, sDst);
+				viewWaveform(_iFboRes, _iChnRes, view_id, view_uv, sDst);
 
-				//uv.y = 1.0 - uv.y;
-				//sSrc = mix(vec3(0, 0, 0), vec3(1, 1, 1), texture2D(iChnSrc, uv).r);
-				//sDst = sSrc;
-				//sDst = mix(vec3(0), sDst, grid.x);
-				//sDst = mix(vec3(1), sDst, grid.y);
-
-				/////////////////////////////////////
-				
 				fragOut = vec4(sDst, 1.0);
 			}
 			);
@@ -174,6 +233,7 @@ public:
 		mAudioBuffer = copy.mAudioBuffer;
 		mGraphTexture = copy.mGraphTexture;
 		mLabels = copy.mLabels;
+		mFont = copy.mFont;
 	}
 
 	AudioBufferGraph(audio::Buffer& buffer, vector<string>& labels)
@@ -185,6 +245,7 @@ public:
 		update(buffer);
 		size_t numFrames = min(mLabels.size(), labels.size());
 		copy(labels.begin(), labels.begin() + numFrames, mLabels.begin());
+		mFont = Font("Courier New", 18.0f);
 	}
 
 	void update(audio::Buffer& other)
@@ -224,6 +285,8 @@ public:
 				gl::ScopedColor scopedColor;
 				//gl::clear();
 
+				// TODO: desenhar shader por faixa ao invés de tudo junto
+				// para poder ter mais controle sobre alcance de niveis e etc...
 				if (prg)
 				{
 					gl::ScopedVao scopedVao(mVao.front());
@@ -262,7 +325,7 @@ public:
 					vec2 nextPos = windowBounds.getUpperLeft();
 					for (auto str = mLabels.begin(); str != mLabels.end(); str++){
 						//gl::drawLine(vec2(windowBounds.getX1(), nextPos.y), vec2(windowBounds.getX2(), nextPos.y));
-						gl::drawString((*str).empty() ? ("Channel " + to_string(std::distance(mLabels.begin(), str))) : *str, nextPos);
+						gl::drawString((*str).empty() ? ("Channel " + to_string(std::distance(mLabels.begin(), str))) : *str, ivec2(nextPos), Color::white(), mFont);
 						nextPos.y += stepPer.y;
 					}
 				}
