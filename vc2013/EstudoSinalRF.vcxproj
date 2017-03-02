@@ -59,6 +59,7 @@
       <WarningLevel>Level3</WarningLevel>
       <DebugInformationFormat>EditAndContinue</DebugInformationFormat>
       <MultiProcessorCompilation>true</MultiProcessorCompilation>
+      <AdditionalOptions>-D_SCL_SECURE_NO_WARNINGS %(AdditionalOptions)</AdditionalOptions>
     </ClCompile>
     <ResourceCompile>
       <AdditionalIncludeDirectories>"..\..\..\..\..\..\..\Repositories\cinder\include";..\include</AdditionalIncludeDirectories>
@@ -83,6 +84,7 @@
       <WarningLevel>Level3</WarningLevel>
       <DebugInformationFormat>ProgramDatabase</DebugInformationFormat>
       <MultiProcessorCompilation>true</MultiProcessorCompilation>
+      <AdditionalOptions>-D_SCL_SECURE_NO_WARNINGS %(AdditionalOptions)</AdditionalOptions>
     </ClCompile>
     <ProjectReference>
       <LinkLibraryDependencies>true</LinkLibraryDependencies>
@@ -109,12 +111,19 @@
   <ItemGroup />
   <ItemGroup />
   <ItemGroup>
+    <ClCompile Include="..\src\AudioBufferGraph.cpp" />
     <ClCompile Include="..\src\EstudoSinalRFApp.cpp" />
+    <ClCompile Include="..\src\RF.cpp" />
+    <ClCompile Include="..\src\Testes.cpp" />
   </ItemGroup>
   <ItemGroup>
     <ClInclude Include="..\include\AudioBufferGraph.hpp" />
+    <ClInclude Include="..\include\DeviceRect.hpp" />
+    <ClInclude Include="..\include\DeviceRectImpl.hpp" />
+    <ClInclude Include="..\include\EstudoSinalRFApp.hpp" />
     <ClInclude Include="..\include\Resources.h" />
     <ClInclude Include="..\include\RF.hpp" />
+    <ClInclude Include="..\include\Testes.hpp" />
   </ItemGroup>
   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.targets" />
   <ImportGroup Label="ExtensionTargets" />

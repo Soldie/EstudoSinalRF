@@ -1,33 +1,6 @@
-#include "cinder/app/App.h"
-#include "cinder/app/RendererGl.h"
-#include "cinder/gl/gl.h"
-#include "cinder/Unicode.h"
-#include "RF.hpp"
-
-using namespace ci;
-using namespace ci::app;
-using namespace std;
-
-class EstudoSinalRFApp : public App {
-  public:
-	void setup() override;
-	void mouseDown( MouseEvent event ) override;
-	void update() override;
-	void draw() override;
-
-	audio::MonitorNodeRef mMonitorNode;
-	audio::InputDeviceNodeRef mInputDeviceNode;
-
-	vector<audio::dsp::RingBuffer>	mHSyncRingBuffer;
-
-
-	audio::Buffer		mHSyncBuffer;
-	RF::HSyncDetector	mHSyncDetector;
-	AudioBufferGraph	mAudioBufferGraph;
-	
-	void gerarSinalTeste(float* data, size_t length);
-	void gerarSinalTeste(audio::Buffer& buffer);
-};
+#include "EstudoSinalRFApp.hpp"
+#include "DeviceRectImpl.hpp"
+#include "Testes.hpp"
 
 void EstudoSinalRFApp::gerarSinalTeste(float* data, size_t length)
 {
@@ -58,20 +31,23 @@ void EstudoSinalRFApp::gerarSinalTeste(float* data, size_t length)
 	float* lastPtr = data;
 	std::fill(data, data + length, 1.0f);
 	data += 8;
+	if (false)
 	{
-		vector<float> model = RF::Teste::Padroes::GerarModelo2();
+		vector<float> model = RF::Testes::Padroes::GerarModelo1();
 		std::copy(model.begin(), model.end(), data);
 	}
 	data += 32;
 	data += 8;
+	if (true)
 	{
-		vector<float> model = RF::Teste::Padroes::GerarModelo1();
+		vector<float> model = RF::Testes::Padroes::GerarModelo2();
 		std::copy(model.begin(), model.end(), data);
 	}
 	data += 32;
 	data += 8;
+	if (false)
 	{
-		vector<float> model = RF::Teste::Padroes::GerarModelo3();
+		vector<float> model = RF::Testes::Padroes::GerarModelo3();
 		std::copy(model.begin(), model.end(), data);
 	}
 	data += 32;
@@ -89,6 +65,12 @@ void EstudoSinalRFApp::gerarSinalTeste(audio::Buffer& buffer)
 
 void EstudoSinalRFApp::setup()
 {
+	mDeviceRect.reset(new DeviceRectImpl());
+
+	//TODO: comparar amostras com modelo de n amostras
+	//TODO: detecção bidimensional (amostra x modelo de n amostras)
+	//TODO: nodo emissor de sinal
+
 	try
 	{
 		audio::Context* ctx = audio::Context::master();
@@ -107,7 +89,7 @@ void EstudoSinalRFApp::setup()
 	//- entrada com imperfeições (deverá não afetar a detecção)
 	//- entrada com padrão levemente modificado (deverá dar erro)
 
-	vector<float> model = RF::Teste::Padroes::GerarModelo1();
+	vector<float> model = RF::Testes::Padroes::GerarModelo1();
 
 	//audio::dsp::RingBuffer rb(128u);
 	//console() << rb.getSize() << "\t" << rb.getReadIndex() << "\t" << rb.getWriteIndex() << endl;
@@ -119,7 +101,7 @@ void EstudoSinalRFApp::setup()
 	mHSyncBuffer = audio::Buffer(128u, 8u);
 
 	size_t ringBufferPaddingFactor = 10u;
-	for (int i = 0; i < mHSyncBuffer.getNumChannels(); i++){
+	for (unsigned i = 0u; i < mHSyncBuffer.getNumChannels(); i++){
 		mHSyncRingBuffer.emplace_back(audio::dsp::RingBuffer(mHSyncBuffer.getNumFrames() * ringBufferPaddingFactor));
 	}
 
@@ -136,6 +118,7 @@ void EstudoSinalRFApp::setup()
 		"Comparador, ativacao",
 		"Comparador, compativel",
 		"Comparador, incompativel",
+		"Sincronismo",
 	});
 }
 
@@ -152,14 +135,13 @@ void EstudoSinalRFApp::draw()
 	gl::clear();
 
 	gerarSinalTeste(mHSyncBuffer);
-
-	const audio::Buffer& buf = mMonitorNode->getBuffer();
-	const float* src = buf.getChannel(0);
-	float* dst = mHSyncBuffer.getChannel(0);
-	audio::dsp::add(src, dst, dst, mHSyncBuffer.getNumFrames());
+	//const audio::Buffer& buf = mMonitorNode->getBuffer();
+	//const float* src = buf.getChannel(0);
+	//float* dst = mHSyncBuffer.getChannel(0);
+	//audio::dsp::add(src, dst, dst, mHSyncBuffer.getNumFrames());
 	
 	mHSyncDetector.process(&mHSyncBuffer);
-	mAudioBufferGraph.update(mHSyncBuffer);
+	mAudioBufferGraph.setGraph(mHSyncBuffer);
 	mAudioBufferGraph.draw(Rectf(getWindowBounds()));
 }
 
