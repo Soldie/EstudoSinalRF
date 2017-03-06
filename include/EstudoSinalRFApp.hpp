@@ -6,6 +6,7 @@
 #include "RF.hpp"
 #include "DeviceRect.hpp"
 #include "AudioBufferGraph.hpp"
+#include "cinder\audio\dsp\Fft.h"
 
 using namespace ci;
 using namespace ci::app;
@@ -14,6 +15,7 @@ using namespace std;
 class EstudoSinalRFApp : public App {
 public:
 
+	EstudoSinalRFApp();
 	void setup() override;
 	void mouseDown(MouseEvent event) override;
 	void update() override;
@@ -23,13 +25,20 @@ private:
 
 	audio::MonitorNodeRef			mMonitorNode;
 	audio::InputDeviceNodeRef		mInputDeviceNode;
-	vector<audio::dsp::RingBuffer>	mHSyncRingBuffer;
 	audio::Buffer					mHSyncBuffer;
-	RF::HSyncDetector				mHSyncDetector;
+	RF::HSyncDetectorRef			mHSyncDetector;
 	AudioBufferGraph				mAudioBufferGraph;
+
+	audio::dsp::Fft mFft;
+	audio::BufferSpectral mBufferSpectral;
+	audio::GenSineNodeRef mGenSineNode;
+	audio::GainNodeRef mGainNode;
 
 	void gerarSinalTeste(float* data, size_t length);
 	void gerarSinalTeste(audio::Buffer& buffer);
+	void gerarQuadroVideoPCM(gl::Texture2dRef& tex);
+
+	gl::Texture2dRef mDataImageFrame;
 
 private:
 

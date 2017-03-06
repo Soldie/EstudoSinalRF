@@ -7,6 +7,8 @@ using namespace ci;
 using namespace ci::app;
 using namespace std;
 
+//TODO: implementar classe padrão factory  (AudioBufferProgramBuilder) para gerar programa com parametros personalizados.
+
 class AudioBufferGraph
 {
 private:
@@ -30,10 +32,15 @@ public:
 
 	AudioBufferGraph() = default;
 
-	AudioBufferGraph(audio::Buffer& buffer, vector<string>& labels);
+	AudioBufferGraph(const audio::Buffer& buffer, const vector<string>& labels);
 
-	void setGraph(audio::Buffer& other);
+	void setGraph(const audio::Buffer& other);
 
-	void draw(Rectf& windowBounds);
+	void draw(const audio::Buffer& buffer, const Rectf& bounds){ 
+		setGraph(buffer);
+		draw(bounds);
+	}
+
+	void draw(const Rectf& bounds);
 
 };

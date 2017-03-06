@@ -10,7 +10,6 @@ using namespace std;
 
 namespace RF{
 	namespace Math{
-
 		float sampleClamp(float x, float a, float b);
 
 		float sampleClamp(float x, vec2& r);
@@ -31,7 +30,9 @@ namespace RF{
 	//class LogicModel
 	//class LogicMatcher
 
-	class HSyncDetector // : public Detector
+	typedef shared_ptr<class HSyncDetector> HSyncDetectorRef;
+
+	class HSyncDetector// : public Noncopyable
 	{
 	private:
 
@@ -122,7 +123,7 @@ namespace RF{
 			mLevelDstMean	= Math::sampleLerp(0.5f, range);
 		}
 
-	public:
+	protected:
 
 		HSyncDetector()
 			: mLogicCompare(false)
@@ -133,9 +134,19 @@ namespace RF{
 			, mFirstLoop(true)
 		{}
 
+	public:
+
+		~HSyncDetector() = default;
+
 		void initialize();
 
 		void process(audio::Buffer* buffer);
+
+		static HSyncDetectorRef create(){
+			HSyncDetectorRef newInstance(new HSyncDetector());
+			newInstance->initialize();
+			return newInstance;
+		}
 	};
 }
 

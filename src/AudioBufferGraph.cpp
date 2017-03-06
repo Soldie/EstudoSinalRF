@@ -231,7 +231,7 @@ void AudioBufferGraph::initShader()
 	}
 }
 
-AudioBufferGraph::AudioBufferGraph(audio::Buffer& buffer, vector<string>& labels)
+AudioBufferGraph::AudioBufferGraph(const audio::Buffer& buffer, const vector<string>& labels)
 	: mAudioBuffer(buffer)
 	, mLabels(labels.begin(), labels.begin() + min(mLabels.size(), buffer.getNumChannels()))
 	, mFont("Courier New", 18.0f)
@@ -246,7 +246,7 @@ AudioBufferGraph::AudioBufferGraph(audio::Buffer& buffer, vector<string>& labels
 	setGraph(buffer);
 }
 
-void AudioBufferGraph::setGraph(audio::Buffer& other)
+void AudioBufferGraph::setGraph(const audio::Buffer& other)
 {
 	if (mAudioBuffer.isEmpty() || other.isEmpty()) return;
 
@@ -261,7 +261,7 @@ void AudioBufferGraph::setGraph(audio::Buffer& other)
 		mAudioBuffer.getNumChannels());
 }
 
-void AudioBufferGraph::draw(Rectf& windowBounds)
+void AudioBufferGraph::draw(const Rectf& windowBounds)
 {
 	AppBase& app = *App::get();
 
@@ -304,26 +304,13 @@ void AudioBufferGraph::draw(Rectf& windowBounds)
 
 		try
 		{
-			//TODO: Usar shader de grade
 			vec2 stepPer = vec2(windowBounds.getSize()) / vec2(tex->getSize());
-			/*
-			{
-			gl::ScopedColor scpColor(Color::black());
+
+			gl::ScopedColor scpColor(Color::white());
 			vec2 nextPos = windowBounds.getUpperLeft();
-			for (unsigned i = 0u; i < mAudioBuffer.getNumFrames(); i++){
-			gl::drawLine(vec2(nextPos.x, windowBounds.getY1()), vec2(nextPos.x, windowBounds.getY2()));
-			nextPos.x += stepPer.x;
-			}
-			}
-			*/
-			{
-				gl::ScopedColor scpColor(Color::white());
-				vec2 nextPos = windowBounds.getUpperLeft();
-				for (auto str = mLabels.begin(); str != mLabels.end(); str++){
-					//gl::drawLine(vec2(windowBounds.getX1(), nextPos.y), vec2(windowBounds.getX2(), nextPos.y));
-					gl::drawString((*str).empty() ? ("Channel " + to_string(std::distance(mLabels.begin(), str))) : *str, ivec2(nextPos), Color::white(), mFont);
-					nextPos.y += stepPer.y;
-				}
+			for (auto str = mLabels.begin(); str != mLabels.end(); str++){
+				gl::drawString((*str).empty() ? ("Channel " + to_string(std::distance(mLabels.begin(), str))) : *str, ivec2(nextPos), Color::white(), mFont);
+				nextPos.y += stepPer.y;
 			}
 		}
 		catch (...)
