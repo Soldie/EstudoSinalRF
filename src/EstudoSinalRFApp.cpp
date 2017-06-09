@@ -2,11 +2,32 @@
 #include "DeviceRectImpl.hpp"
 #include "Testes.hpp"
 
-#include <thrust\random.h>
-#include <thrust\device_vector.h>
-#include <thrust\host_vector.h>
+//#define GLM_FORCE_SSE2
+//#include <glm/gtx/simd_vec4.hpp>
+#include <glm/glm.hpp>
 
-#include <boost\crc.hpp>
+//Nota 1: Thrust requer placa NVIDIA e compilador NVCC.
+//#include <thrust\random.h>
+//#include <thrust\device_vector.h>
+//#include <thrust\host_vector.h>
+
+//Nota 2: Por alguma razão, OpenCL interfere no uso de shaders OpenGL.
+//#define USAR_OPENCL
+
+/*
+struct RandGen
+{
+	__device__
+		float operator () (int idx)
+	{
+		thrust::default_random_engine randEng;
+		thrust::uniform_real_distribution<float> uniDist;
+		randEng.discard(idx);
+		return uniDist(randEng);
+	}
+};
+*/
+
 
 /*
 namespace DataImage
@@ -191,63 +212,129 @@ void EstudoSinalRFApp::gerarSinalTeste(audio::Buffer& buffer)
 }
 
 
-struct RandGen
+#if defined USAR_OPENCL
+#include <CL/cl.hpp>
+#define CL_KERNEL_CODE(text) #text
+
+void PCMVideoEncoder::setupCL()
 {
-	__device__
-	float operator () (int idx)
+	vector<cl::Platform> platforms;
+	cl::Platform::get(&platforms);
+
+	if (!platforms.empty())
 	{
-		thrust::default_random_engine randEng;
-		thrust::uniform_real_distribution<float> uniDist;
-		randEng.discard(idx);
-		return uniDist(randEng);
+		cout << "Platforms available:" << endl;
+
+		for (auto platform : platforms)
+			cout << "\t" << platform.getInfo<CL_PLATFORM_NAME>() << endl;
+
+		cl::Platform selectedPlatform = cl::Platform::getDefault();
+		cout << endl << "Platform selected: " << selectedPlatform.getInfo<CL_PLATFORM_NAME>() << endl << endl;
+
+		vector<cl::Device> devices;
+		selectedPlatform.getDevices(CL_DEVICE_TYPE_ALL, &devices);
+
+		if (!devices.empty())
+		{
+			cout << "Devices available:" << endl;
+			for (auto device : devices){
+				cout << "\t" << device.getInfo<CL_DEVICE_NAME>() << endl;
+			}
+
+			cl::Device selectedDevice = cl::Device::getDefault();
+			cout << endl << "Device selected: " << selectedDevice.getInfo<CL_DEVICE_NAME>() << endl << endl;
+			
+			cl::Context context({ selectedDevice });
+
+			//////////////////////////////////////////////////////////////////////////////
+			
+			string kernelCode = CL_KERNEL_CODE(
+				void kernel simple_add(global const int* A, global const int* B, global int* C)
+				{
+					int id = get_global_id(0);
+					C[id] = A[id] + B[id];
+				}
+			);
+
+			//////////////////////////////////////////////////////////////////////////////
+			
+			cl::Program::Sources sources;
+			sources.push_back({kernelCode.c_str(), kernelCode.length()});
+			
+			cl::Program program(context, sources);
+			if (program.build({ selectedDevice }) == CL_SUCCESS)
+			{
+				vector<int> numbers(100);
+				for (size_t i = 0; i < numbers.size(); i++)
+				{
+					int n = i + 1;
+					numbers.at(i) = n*n;
+				}
+				size_t dataSize = sizeof(int) * numbers.size();
+
+				///////////////////////////////////////////////////////////////////////////////
+
+				cl::Buffer bufferA(context, CL_MEM_READ_WRITE, dataSize);
+				cl::Buffer bufferB(context, CL_MEM_READ_WRITE, dataSize);
+				cl::Buffer bufferC(context, CL_MEM_READ_WRITE, dataSize);
+
+				///////////////////////////////////////////////////////////////////////////////
+
+				cl::Kernel kernel_add = cl::Kernel(program, "simple_add");
+				kernel_add.setArg(0, bufferA);
+				kernel_add.setArg(1, bufferB);
+				kernel_add.setArg(2, bufferC);
+
+				///////////////////////////////////////////////////////////////////////////////
+				
+				cl::CommandQueue queue(context, selectedDevice);
+				queue.enqueueWriteBuffer(bufferA, CL_TRUE, 0, dataSize, numbers.data());
+				queue.enqueueWriteBuffer(bufferB, CL_TRUE, 0, dataSize, numbers.data());
+				queue.enqueueNDRangeKernel(kernel_add, cl::NullRange, cl::NDRange(numbers.size()), cl::NullRange);
+				queue.finish();
+				queue.enqueueReadBuffer(bufferC, CL_TRUE, 0, dataSize, numbers.data());
+
+				///////////////////////////////////////////////////////////////////////////////
+
+				cout << "Result: " << endl;
+				for (size_t i = 0; i < numbers.size(); i++)
+				{
+					cout << numbers.at(i) << "\t";
+				}
+				cout << endl;
+			}
+			else
+			{
+				cout << "Error building: " << program.getBuildInfo<CL_PROGRAM_BUILD_LOG>(selectedDevice) << endl;
+			}
+		}
+		else
+		{
+			cout << "No devices found." << endl;
+		}
 	}
+	else
+	{
+		cout << "No platforms available." << endl;
+	}
+}
+#endif //INCLUIR_OPENCL
+
+void PCMVideoEncoder::writeBitmap(vector<float>::iterator& cur, vector<float>::iterator& end, uint16_t value)
+{
+	size_t bitShift = std::distance(cur, end);
+
+	while (cur != end)
+		*cur++ = static_cast<float>((value >> --bitShift) & 0x1);
+
+	cur = end;
 };
 
-
-void EstudoSinalRFApp::gerarQuadroVideoPCM(gl::Texture2dRef& tex)
+void PCMVideoEncoder::updateStream(
+	size_t samplesPerBlock, 
+	size_t blocksPerFrame, 
+	vector<uint16_t>& values)
 {
-	// Calculos usados:
-	// - Dimensão 640 x 480 (com fator por bit 5:1, fica 128 x 480)
-	// - Formato de dados por linha: Valores 16 bits (clock + 6 amostras + checksum = 128 bits)
-	// - Fator aspecto por bit: 5 (640/128)
-
-	// Base 640 pixels/linha:
-	// - 640 bits, fator 1:1 = 40 valores de 16 bits
-	// - 320 bits, fator 2:1 = 20 valores de 16 bits
-	// - 160 bits, fator 4:1 = 10 valores de 16 bits
-	// - 128 bits, fator 5:1 =  8 valores de 16 bits
-	// -  80 bits, fator 8:1 =  5 valores de 16 bits 
-
-	// Base 720 pixels/linha:
-	// - 720 bits, fator 1:1 = 45 valores de 16 bits
-	// - 120 bits, fator 6:1 =  7 valores de 16 bits + clock 8 bits
-
-
-	size_t bitDepth = 16u;
-	size_t samplesPerBlock = 6u;
-
-	/////////////////////////////////////////////////////////////////
-
-	/*
-	std::default_random_engine re(std::chrono::high_resolution_clock::now().time_since_epoch().count());
-	std::uniform_int_distribution<uint16_t> rd;
-	std::vector<uint16_t> values(samplesPerBlock * tex->getHeight());
-	std::generate(values.begin(), values.end(), bind(re,rd));
-	*/
-
-	/*
-	// Baseado em:
-	// https://codeyarns.com/2013/10/31/how-to-generate-random-numbers-in-thrust/
-	// FIXME: compilar com nvcc -> http://stackoverflow.com/questions/28965173/cuda-thrustdevice-vector-of-class-error
-	thrust::host_vector<uint16_t> values(samplesPerBlock * tex->getHeight());
-	thrust::device_vector<uint16_t> dvalues = values;
-	const int randNum = dvalues.size();
-	thrust::transform(thrust::make_counting_iterator(0),thrust::make_counting_iterator(randNum),dvalues.begin(),RandGen());
-	thrust::copy(dvalues.begin(), dvalues.end(), values.begin());
-	*/
-
-	std::vector<uint16_t> values(samplesPerBlock * tex->getHeight());
-
 	const double sampleRate = 44100.0;// tex->getHeight();
 	const double samplePeriod = 1.0 / sampleRate;
 	const double sampleValue = static_cast<double>(numeric_limits<int16_t>::max());
@@ -258,6 +345,26 @@ void EstudoSinalRFApp::gerarQuadroVideoPCM(gl::Texture2dRef& tex)
 		unsigned method = 0;
 		double func = 0.0;
 
+		// Nota: Tentativa de aceleração com SIMD através do GLM.
+		// Há um preprocessador declarado em "Preprocessor definitions"
+		// para tentar forçar o GLM a utilizar instruções SSE2.
+		// Caminho: Properties > C++ > Preprocessor > Preprocessor definitions.
+		dvec4 simd_value;
+		dvec4 simd_steps = dvec4(samplePeriod) * dvec4(0, 1, 2, 3);
+
+		while (value != values.end() || std::distance(value, values.end()) > 4){
+
+			simd_value = dvec4(sampleValue) * glm::sin(dvec4(2.0 * M_PI * phase) + simd_steps);
+
+			phase = fract(phase + frequency * (samplePeriod * 4));
+
+			*value++ = static_cast<uint16_t>(simd_value.x);
+			*value++ = static_cast<uint16_t>(simd_value.y);
+			*value++ = static_cast<uint16_t>(simd_value.z);
+			*value++ = static_cast<uint16_t>(simd_value.w);
+		}
+		
+		/*
 		while (value != values.end()){
 			func = sin(2.0 * M_PI * phase);
 			switch (method){
@@ -272,135 +379,171 @@ void EstudoSinalRFApp::gerarQuadroVideoPCM(gl::Texture2dRef& tex)
 				phase = fract(phase + frequency * samplePeriod);
 				break;
 			case 2:
-				double step = 1.0 / tex->getHeight();
+				double step = 1.0 / blocksPerFrame;
 				fill(value, value + samplesPerBlock, sampleValue * func);
 				func += step;
 				value += samplesPerBlock;
 			}
 		}
+		*/
 
 		// simula error pointer
-		// std::fill(values.end() - (samplesPerBlock * 1), values.end(), 0);
-		std::fill(values.begin(), values.begin() + samplesPerBlock * 2, 0);
+		// std::fill(values.end() - samplesPerBlock), values.end(), 0);
+		std::fill(values.begin(), values.begin() + samplesPerBlock, 0);
 	}
 	/*
 	{
-		auto it = values.begin();
-		for (int i = 0; it != values.end(); i++){
-			//fill(it, it + samplesPerBlock, i);
-			//it += samplesPerBlock;
-			*it++ = i;
-		}
+	auto it = values.begin();
+	for (int i = 0; it != values.end(); i++){
+	//fill(it, it + samplesPerBlock, i);
+	//it += samplesPerBlock;
+	*it++ = i;
+	}
 	}
 	*/
 
-	auto value = values.begin();
+}
 
-	/////////////////////////////////////////////////////////////////
+// Amostras intercaladas:
+//
+// Patente US4459696. Coluna 3, linha 20:
+// - In this case, the number of blocks of the interleave is 16, 
+// which is equivalent to a word-interleave of 3D = 48 words 
+// since there are twochannels and three words from each channel 
+// in a data block.
+//
+// Conclusões:
+// - um bloco é amostras por linha.
+// - cada bloco possui 6 amostras ou 3 pares de amostras, sem contar com 'dados de correção' e 'crc'.
+// - atraso ocorre em 16 blocos, multiplicado pelo fator do indice de coluna.
+// - sinal é entrelaçado, então os ponteiros de erro aparentam ser maior na saída final.
 
-	//typedef thrust::host_vector<float> FVec;
-	typedef std::vector<float> FVec;
-	typedef FVec::iterator FVecIter;
+void PCMVideoEncoder::updateFrame(gl::Texture2dRef& tex)
+{
+	auto	bitRow = bitmap.begin();
+	auto	bitCol = bitRow;
+	auto	bitEnd = bitmap.end();
+	int		interleaveBlocks = 16 * 3;
+	ivec3	interleaveOffset;
+	ivec2	sampleOffset;
 
-	static function<void(FVecIter, FVecIter, uint16_t)> encodeWord = [&](FVecIter beg, FVecIter end, uint16_t value){
-		size_t bitShift = std::distance(beg, end);
-		while (beg != end){
-			*beg++ = static_cast<float>((value >> --bitShift) & 0x1);
-		}
-	};
-	
-	boost::crc_16_type	crc;
-	vector<uint16_t>	samples(samplesPerBlock);
-	vector<float>		bitBuf(tex->getWidth()*tex->getHeight());
-	auto				bitRow = bitBuf.begin();
-	auto				bitCol = bitRow;
-	auto				bitEnd = bitRow;
-	ivec2				sampleOffset;
+	//TODO: sinal entrelaçado
 
-	// Amostras intercaladas:
-	//
-	// Patente US4459696. Coluna 3, linha 20:
-	// - In this case, the number of blocks of the interleave is 16, 
-	// which is equivalent to a word-interleave of 3D = 48 words 
-	// since there are twochannels and three words from each channel 
-	// in a data block.
-	//
-	// Conclusões:
-	// - um bloco é amostras por linha.
-	// - cada bloco possui 6 amostras ou 3 pares de amostras, sem contar com 'dados de correção' e 'crc'.
-	// - atraso ocorre em 16 blocos, multiplicado pelo fator do indice de coluna.
-	// - sinal é entrelaçado, então os ponteiros de erro aparentam ser maior na saída final.
-
-	// ponteiro de erro na 6a coluna deve estar no meio do quadro.
-	int	interleaveBlocks = tex->getHeight() / ((samplesPerBlock - 1) * 2); // 16
-	ivec3 interleaveOffset;
-
-	while (bitRow != bitBuf.end())
+	while (bitRow != bitEnd)
 	{
 		// Clock
-		//bitEnd = bitCol + 4;
-		//encodeWord(bitCol, bitEnd, 0xA); // 1010
-		//bitCol = bitEnd;
-
-		bitEnd = bitCol + 8;
-		encodeWord(bitCol, bitEnd, 0xAA); // 1010
-		bitCol = bitEnd;
+		//0x6AAA = 0110 10101010
+		//0x5556 = 01010101 0110
+		writeBitmap(bitCol, bitCol + 16, 0x5556); // 101010
 		
 		// Amostras
-		for (auto s = samples.begin(); s != samples.end(); s++)
+		for (auto sample = block.begin(); sample != block.end(); sample++)
 		{
-			sampleOffset.x = std::distance(samples.begin(), s);
+			sampleOffset.x = std::distance(block.begin(), sample);
 
 			interleaveOffset.x = sampleOffset.x;
 			interleaveOffset.y = (sampleOffset.y - sampleOffset.x * interleaveBlocks)  % tex->getHeight();
 			interleaveOffset.z = interleaveOffset.x + interleaveOffset.y * samplesPerBlock;
 
 			if (interleaveOffset.z < 0)
-				interleaveOffset.z = values.size() - abs(interleaveOffset.z);
+				interleaveOffset.z = stream.size() - abs(interleaveOffset.z);
 
-			*s = values.at(interleaveOffset.z);
+			*sample = stream.at(interleaveOffset.z);
 
-			bitEnd = bitCol + bitDepth;
-			encodeWord(bitCol, bitEnd, *s);
-			//fill(bitCol, bitCol + bitDepth, abs(-1.0 + 2.0*(*s / sampleValue)));
-			bitCol = bitEnd;
+			writeBitmap(bitCol, bitCol + bitsPerSample, *sample);
 		}
 		sampleOffset.y++;
 
-		// Checksum (com boost::crc_16_type)
-		crc.process_bytes(samples.data(), samples.size() * 2);
-		bitEnd = bitCol + bitDepth;
-		encodeWord(bitCol, bitEnd, crc.checksum());
-		bitCol = bitEnd;
+		// CRC
+		crc.process_bytes(block.data(), block.size() * sizeof(uint16_t));
+		writeBitmap(bitCol, bitCol + bitsPerSample, crc.checksum());
 
 		// Clock
-		//bitEnd = bitCol + 10;
-		//encodeWord(bitCol, bitEnd, 0x1E1); // 0111100000
-		//bitCol = bitEnd;
-		
-		bitEnd = bitCol + 8;
-		encodeWord(bitCol, bitEnd, 0x55); // 1010
-		bitCol = bitEnd;
+		//writeBitmap(bitCol, bitCol + 4, 0x6); // 0101
 
 		bitCol = bitRow += tex->getWidth();
 	}
 
-	tex->update(bitBuf.data(), GL_RED, GL_FLOAT, 0, tex->getWidth(), tex->getHeight());
+
+	{
+		/*
+		gl::disableDepthRead();
+		gl::disableDepthWrite();
+		gl::ScopedTextureBind scpTex(mFrame);
+		{
+			gl::ScopedBuffer scpPbo(mPbo);
+			mPbo->bufferData(bitmap.size() * sizeof(float), nullptr, GL_STREAM_DRAW);
+
+			void* mem = mPbo->mapWriteOnly();
+
+			if (mem)
+			{
+				console() << "udfhusfhd" << endl;
+				std::memcpy(mem, bitmap.data(), bitmap.size() * sizeof(float));
+				mPbo->unbind();
+			}
+			console() << "lalalalala" << endl;
+		}
+		*/
+		tex->update(bitmap.data(), GL_RED, GL_FLOAT, 0, tex->getWidth(), tex->getHeight());
+	}
+
 }
 
-void EstudoSinalRFApp::setup()
+void PCMVideoEncoder::setup()
 {
-	mDeviceRect.reset(new DeviceRectImpl());
+#if defined USAR_OPENCL
+	setupCL();
+#endif // USAR_OPENCL 
 
-	//////////////////////////////////////////////////////////////////////
+	mSignalDraw = App::get()->getWindow()->getSignalPostDraw().connect(bind(&PCMVideoEncoder::draw, this));
+
+	bitsPerSample	= 16u;
+	samplesPerBlock = 6u;
+	periodPerBit	= 5u;
 
 	gl::Texture2d::Format texFormat;
 	texFormat.dataType(GL_FLOAT);
 	texFormat.minFilter(GL_NEAREST);
 	texFormat.magFilter(GL_NEAREST);
 
-	size_t pixelsBit = 5u;
-	mDataImageFrame = gl::Texture2d::create(640 / pixelsBit, 480, texFormat);
+	mFrame	= gl::Texture2d::create(640 / periodPerBit, 480, texFormat);
+	bitmap	= vector<float>(mFrame->getWidth() * mFrame->getHeight());
+	stream	= vector<uint16_t>(samplesPerBlock * mFrame->getHeight());
+	block	= vector<uint16_t>(samplesPerBlock);
+	mPbo	= gl::Pbo::create(GL_PIXEL_UNPACK_BUFFER, bitmap.size() * sizeof(float));
+}
+
+void PCMVideoEncoder::draw()
+{
+	updateStream(samplesPerBlock, mFrame->getHeight(), stream);
+	updateFrame(mFrame);
+	Area src = mFrame->getBounds();
+	Rectf dst = Rectf(vec2(0, src.getHeight()), vec2(src.getWidth() * periodPerBit, 0));
+	gl::draw(mFrame, src, dst);
+	gl::drawString(to_string(App::get()->getAverageFps()), vec2());
+}
+
+PCMVideoEncoderRef PCMVideoEncoder::create()
+{
+	PCMVideoEncoderRef newInstance = make_shared<PCMVideoEncoder>();
+	newInstance->setup();
+	return newInstance;
+}
+
+
+
+
+
+
+void EstudoSinalRFApp::setup()
+{
+	mDeviceRect.reset(new DeviceRectImpl());
+
+	mPCMVideoEncoder = PCMVideoEncoder::create();
+
+	//////////////////////////////////////////////////////////////////////
+
 
 	// Casos de teste:
 	// - exatidão do algoritmos
@@ -468,6 +611,7 @@ void EstudoSinalRFApp::update()
 void EstudoSinalRFApp::draw()
 {
 	gl::clear();
+	gl::color(Color::white());
 
 	//gerarSinalTeste(mHSyncBuffer);
 	//const audio::Buffer& buf = mMonitorNode->getBuffer();
@@ -499,17 +643,6 @@ void EstudoSinalRFApp::draw()
 
 	mAudioBufferGraph.setGraph(mHSyncBuffer);
 	mAudioBufferGraph.draw(Rectf(getWindowBounds()));
-
-	gl::color(Color::white());
-
-	//gl::ScopedMatrices scpMatrices;
-	//gl::setMatricesWindow(getWindowSize(),false);
-	gerarQuadroVideoPCM(mDataImageFrame);
-	Area src = mDataImageFrame->getBounds();
-	Rectf dst = Rectf(vec2(0, src.getHeight()), vec2(src.getWidth()*5, 0));
-	//Rectf dst = Rectf(vec2(0, src.getHeight()), vec2(src.getWidth(), 0));
-	//Rectf dst = Rectf(vec2(0, getWindowHeight()), vec2(getWindowWidth(), 0));
-	gl::draw(mDataImageFrame, src, dst);
 }
 
 CINDER_APP(EstudoSinalRFApp, RendererGl(RendererGl::Options().msaa(1)), [&](App::Settings *settings)
