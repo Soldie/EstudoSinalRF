@@ -51,81 +51,120 @@ namespace PCMVideo
 	{
 	private:
 
-		int bitDepth;
-		ivec2 oversampleFactor;
-		ivec2 frameSize;
-		std::vector<float> frameBuffer;
-		std::vector<float> frameField;
+		size_t bitDepth;
+		size_t bitPeriod;
+		size_t fieldPeriod;
+		size_t fieldIndex;
+		size_t samplesPerField;
+		ivec2 resolution;
+		std::vector<uint16_t> samples; // para usar em conjunto com boost::crc
+		std::vector<float> field;
+		std::vector<float> frame;
+		boost::crc_16_type crc16;
 
-		//boost::crc<16> crc;
-
-		std::vector<float>::iterator pushValue(std::vector<float>::iterator beg, std::vector<float>::iterator end, uint64_t value)
+		std::vector<float>::iterator writeBits(std::vector<float>::iterator beg, size_t count, const void* data)
 		{
-			size_t bitShift = std::distance(beg, end);
+			auto end = beg + count;
+
+			auto bitShift = std::distance(beg, end); // a partir do MSB
+
+			const uint64_t& value = *reinterpret_cast<const uint64_t*>(data);
 
 			while (beg != end)
-				*beg++ = static_cast<float>((value >> --bitShift) & 0x1);
+				*beg++ = static_cast<float>(value >> --bitShift & 0x1);
 
-			return beg;
+			return end;
 		}
 
-		std::vector<float>::iterator pushValueU(std::vector<float>::iterator beg, uint16_t value)
+		std::vector<float>::iterator writeBits16(std::vector<float>::iterator beg, const void* data)
 		{
-			return pushValue(beg, beg + 16, static_cast<uint64_t>(value));
+			return writeBits(beg, 16, data);
 		}
 
-		std::vector<float>::iterator pushValueF(std::vector<float>::iterator beg, float value)
+		uint16_t floatToUInt16(float value)
 		{
-			return pushValue(beg, beg + 16, static_cast<uint64_t>(32767.0f * value));
+			return static_cast<uint16_t>(32767.0f * value);
 		}
 
 	public:
 
 		FrameEncoder()
 		{
-			bitDepth = 16;
-			oversampleFactor = ivec2(5, 2);
-			frameSize = ivec2(640, 490) / oversampleFactor; // 8 unidades de 16 bits
-			frameBuffer.resize(frameSize.x*frameSize.y);
-			frameField.resize(frameSize.x);
-		}
+			bitDepth = 16u;
+			bitPeriod = 5u;
+			fieldPeriod = 2u;
+			samplesPerField = 3u;
+			resolution = ivec2(640, 490) / ivec2(bitPeriod,fieldPeriod); // 8 unidades de 16 bits
 
-		ivec2 getFrameSize()
-		{
-			return frameSize;
-		}
+			samples.resize(6, 0u); // 3 amostras de 2ch = 6
+			field.resize(resolution.x,0.0f);
+			frame.resize(resolution.x*resolution.y);
 
-		ivec2 getOversampleFactor()
-		{
-			return oversampleFactor;
-		}
-
-		void update(const ci::audio::Buffer& buffer)
-		{
-			auto frameCol = frameBuffer.begin();
-			auto frameEnd = frameBuffer.end();
-
-			const auto* inputCol = buffer.getChannel(0u);
-
-			//TODO: otimizar processo, principalmente em relação ao clock)
-			//TODO: acelerar escrita das amostras
-
-			while (frameCol != frameEnd)
+			/*
+			auto frameIter = frame.begin();
+			while (frameIter != frame.end())
 			{
-				frameCol = pushValueU(frameCol, 0x5556);
-				frameCol = pushValueF(frameCol, *inputCol++);
-				frameCol = pushValueF(frameCol, *inputCol++);
-				frameCol = pushValueF(frameCol, *inputCol++);
-				frameCol = pushValueF(frameCol, *inputCol++);
-				frameCol = pushValueF(frameCol, *inputCol++);
-				frameCol = pushValueF(frameCol, *inputCol++);
-				frameCol = pushValueU(frameCol, 0x6AAA); 
+				frameIter = std::copy(field.begin(), field.end(), frameIter);
+			}
+			*/
+
+			fieldIndex = 0u;
+		}
+
+		ivec2 getResolution(){return resolution;}
+
+		size_t getBitPeriod(){return bitPeriod;}
+
+		size_t getFieldPeriod(){return fieldPeriod;}
+
+		void update(const ci::audio::Buffer& line)
+		{
+			const auto* ch0 = line.getChannel(0u);
+			const auto* ch1 = line.getChannel(1u);
+
+			auto frameIter = frame.begin();
+
+			while (frameIter != frame.end())
+			{
+				// Converte amostras
+				auto sampleIter = samples.begin();
+				for (unsigned i = 0u; i < samplesPerField; i++)
+				{
+					*sampleIter++ = floatToUInt16(*ch0++);
+					*sampleIter++ = floatToUInt16(*ch1++);
+				}
+
+				crc16.reset();
+				crc16.process_block(&*samples.begin(), &*(samples.end()-1));
+
+				// Escreve campo
+				sampleIter = samples.begin();
+				auto fieldIter = field.begin();
+
+				uint16_t clockword = 0x5556;
+				fieldIter = writeBits16(fieldIter, &clockword);
+
+				for (unsigned i = 0u; i < samplesPerField; i++)
+				{
+					fieldIter = writeBits16(fieldIter, &*sampleIter++);
+					fieldIter = writeBits16(fieldIter, &*sampleIter++);
+				}
+
+				uint16_t checksum = crc16.checksum();
+				fieldIter = writeBits16(fieldIter, &checksum);
+
+				// Preenche quadro;
+				frameIter = std::copy(field.begin(), field.end(), frameIter);
 			}
 		}
 
 		void render(gl::Texture2dRef tex)
 		{
-			tex->update(frameBuffer.data(), GL_RED, GL_FLOAT, 0, frameSize.x, frameSize.y);
+			tex->update(frame.data(), GL_RED, GL_FLOAT, 0, resolution.x, resolution.y);
+
+			//tex->update(field.data(), GL_RED, GL_FLOAT, 0, resolution.x, 1u, glm::ivec2(0, fieldIndex));
+			//fieldIndex++;
+			//fieldIndex %= resolution.y;
 		}
 	};
 
@@ -137,70 +176,38 @@ namespace PCMVideo
 		}
 	};
 
-	class AudioNodeBase
-	{
-	protected:
-
-		// 3 * 490 * 30 = 44100Hz
-		// 3 * 245 * 60 = 44100Hz
-		// 3 * 480 * 30 = 43200Hz
-		// 3 * 240 * 60 = 43200Hz
-		//
-		// 3 amostras de 1Ch, periodo de bit maior
-		// 3 amostras de 2Ch, periodo de bit menor
-
-		AudioNodeBase() = default;
-
-		size_t samplesPerLine;
-		size_t linesPerField;
-		size_t fieldsPerSeconds;
-		size_t samplesPerFrame;
-		size_t samplesPerSecond;
-		size_t bufferSecondsCapacity;
-		ci::audio::dsp::RingBuffer mRingBuffer;
-		ci::audio::Buffer mCopyBuffer;
-
-		void initialize()
-		{
-			samplesPerLine = 3u;
-			linesPerField = 245u;
-			fieldsPerSeconds = 60u;
-			samplesPerFrame = samplesPerLine * linesPerField;
-			samplesPerSecond = samplesPerFrame * fieldsPerSeconds;
-			bufferSecondsCapacity = 10u;
-
-			mRingBuffer.resize(samplesPerSecond * bufferSecondsCapacity);
-			mCopyBuffer = ci::audio::Buffer(samplesPerSecond);
-		}
-	};
-
-	class AudioInputNode
-		: public AudioNodeBase
-		, public ci::audio::Node
+	class AudioInputNode : public ci::audio::Node
 	{
 	private:
 
-		bool frameAvailable = false;
-		ci::signals::Signal<void()> mFrameAvailableSignal;
+		size_t mSamplesPerSecond;
+		size_t mCapacitySeconds;
+		std::vector<ci::audio::dsp::RingBuffer> mRingBuffer;
+		ci::audio::Buffer mCopyBuffer;
 
 		void initialize() override
 		{
-			AudioNodeBase::initialize();
+			mCapacitySeconds = 1u;
+			mSamplesPerSecond = 44100u;
+
+			mRingBuffer.resize(getNumChannels());
+			for (auto rb = mRingBuffer.begin(); rb != mRingBuffer.end(); rb++)
+			{
+				(*rb).resize(mSamplesPerSecond * mCapacitySeconds);
+			}
+
+			// (3 amostras * 2ch) * 245 linhas * 30 campos = 44100hz
+
+			mCopyBuffer = ci::audio::Buffer(3u * 245u, getNumChannels());
 		}
 
 		void process(ci::audio::Buffer* buffer) override
 		{
-			if (mRingBuffer.write(buffer->getChannel(0), std::min(buffer->getNumFrames(), this->getFramesPerBlock())))
+			size_t length = std::min(buffer->getNumFrames(), getFramesPerBlock());
+			size_t channels = std::min(getNumChannels(), buffer->getNumChannels());
+			for (size_t ch = 0u; ch < channels; ch++)
 			{
-				if (mRingBuffer.getAvailableRead() >= samplesPerFrame && !frameAvailable)
-				{
-					mFrameAvailableSignal.emit();
-					frameAvailable = true;
-				}
-				else if (frameAvailable)
-				{
-					frameAvailable = false;
-				}
+				mRingBuffer.at(ch).write(buffer->getChannel(ch), length);
 			}
 		}
 
@@ -209,53 +216,47 @@ namespace PCMVideo
 		AudioInputNode(const audio::Node::Format& fmt) : audio::Node(fmt)
 		{}
 
-		ci::audio::dsp::RingBuffer& getRingBuffer()
+		const ci::audio::Buffer& readLine()
 		{
-			return mRingBuffer;
-		}
-
-		const ci::audio::Buffer& getBuffer()
-		{
-			mRingBuffer.read(mCopyBuffer.getChannel(0u), mCopyBuffer.getNumFrames());
+			size_t length = mCopyBuffer.getNumFrames();
+			size_t channels = std::min(getNumChannels(), mRingBuffer.size());
+			for (size_t ch = 0u; ch < channels; ch++)
+			{
+				mRingBuffer.at(ch).read(mCopyBuffer.getChannel(ch), length);
+			}
 			return mCopyBuffer;
 		}
 
 		size_t getReadIndex()
 		{
-			return mRingBuffer.getReadIndex();
+			return mRingBuffer.at(0).getReadIndex();
 		}
 
 		size_t getWriteIndex()
 		{
-			return mRingBuffer.getWriteIndex();
+			return mRingBuffer.at(0).getWriteIndex();
 		}
 
 		size_t getAvailableSamples()
 		{
-			return mRingBuffer.getAvailableRead();
+			return mRingBuffer.at(0).getAvailableRead();
 		}
 
-		size_t getAvailableFrames()
+		size_t getCapacity()
 		{
-			return mRingBuffer.getAvailableRead() / samplesPerFrame;
+			return mRingBuffer.at(0).getSize();
+		}
+
+		size_t getCapacitySeconds()
+		{
+			return getCapacity() / mSamplesPerSecond;
 		}
 
 		float getAvailableSeconds()
 		{
-			return static_cast<float>(mRingBuffer.getAvailableRead()) / samplesPerSecond;
-		}
-
-		size_t getFrameSize()
-		{
-			return samplesPerFrame;
-		}
-
-		ci::signals::ScopedConnection attachAvailableFramesHandle(std::function<void()>& fn)
-		{
-			return mFrameAvailableSignal.connect(fn);
+			return static_cast<float>(getAvailableSamples()) / mSamplesPerSecond;
 		}
 	};
-
 }
 
 class EstudoSinalRFApp : public App {
@@ -275,8 +276,9 @@ private:
 	std::shared_ptr<PCMVideo::AudioInputNode>	mAudioInputNode;
 	std::shared_ptr<PCMVideo::FrameEncoder>		mFrameEncoder;
 	std::shared_ptr<PCMVideo::FrameDecoder>		mFrameDecoder;
-	std::vector<float>							mAudioFrame;
 	gl::Texture2dRef							mVideoFrame;
+
+	ci::Timer									mFrameEncodeTimer;
 
 public:
 
