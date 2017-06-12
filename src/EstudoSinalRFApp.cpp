@@ -22,8 +22,9 @@ void EstudoSinalRFApp::setup()
 
 		//Nodes
 		mInputDeviceNode = ctx->createInputDeviceNode(inputDevice, nodeFormat);
-		mAudioInputNode = ctx->makeNode<PCMVideo::AudioInputNode>(nodeFormat);
-		mInputDeviceNode >> mAudioInputNode >> ctx->getOutput();
+		mAudioReaderNode = ctx->makeNode<PCMAdaptor::AudioReaderNode>(nodeFormat);
+		mAudioWriterNode = ctx->makeNode<PCMAdaptor::AudioWriterNode>(nodeFormat);
+		mInputDeviceNode >> mAudioReaderNode >> mAudioWriterNode >> ctx->getOutput();
 
 		ctx->enable();
 	}
@@ -32,17 +33,55 @@ void EstudoSinalRFApp::setup()
 		console() << e.what() << endl;
 	}
 
-	mFrameEncoder = std::make_shared<PCMVideo::FrameEncoder>();
+	mVideoEncoder = std::make_shared<PCMAdaptor::VideoEncoder>();
+
+	mVideoDecoder = std::make_shared<PCMAdaptor::VideoDecoder>();
+
+	mAudioFrame = ci::audio::Buffer(3u * 245u, 2u);
 
 	mVideoFrame = gl::Texture2d::create(
-		mFrameEncoder->getResolution().x,
-		mFrameEncoder->getResolution().y,
+		mVideoEncoder->getResolution().x,
+		mVideoEncoder->getResolution().y,
 		gl::Texture2d::Format()
 		.internalFormat(GL_R32F)
 		.minFilter(GL_NEAREST)
 		.magFilter(GL_NEAREST)
 		.wrapS(GL_CLAMP_TO_BORDER)
 		.wrapT(GL_CLAMP_TO_BORDER));
+
+
+	auto printSignal = [](std::vector<float>& signal)
+	{
+		std::copy(signal.begin(), signal.end(), std::ostream_iterator<float>(std::cout));
+		std::cout << std::endl;
+	};
+
+	std::vector<float> signal(64,0.0f);
+	for (auto level = signal.begin(); level != signal.end(); level++)
+	{
+		size_t n = std::distance(signal.begin(), level);
+		*level = static_cast<float>(std::min(std::max((n / 4u) % 2u, 0u), 1u));
+	}
+	printSignal(signal);
+
+	PCMAdaptor::ClockParser clockParser;
+	PCMAdaptor::ClockGenerator clockGenerator(16.0f);
+
+	clockGenerator.reset();
+	clockGenerator.triggerEnabled = false;
+	clockGenerator.process(&signal);
+	printSignal(signal);
+
+	clockGenerator.reset();
+	clockGenerator.triggerEnabled = true;
+	clockGenerator.process(&signal);
+	printSignal(signal);
+
+	clockGenerator.reset();
+	clockGenerator.triggerEnabled = false;
+	clockGenerator.process(&signal);
+	clockParser.reset();
+	clockParser.process(&signal);
 }
 
 void EstudoSinalRFApp::mouseDown(MouseEvent event)
@@ -54,13 +93,17 @@ void EstudoSinalRFApp::update()
 {
 	mFrameEncodeTimer.start();
 
-	if (mAudioInputNode->getAvailableSeconds() > 0.1f)
+	if (mAudioReaderNode->getAvailableSeconds() > 0.1f)
 	{
-		auto& line = mAudioInputNode->readLine();
+		mAudioReaderNode->read(mAudioFrame);
 
-		mFrameEncoder->update(line);
+		mVideoEncoder->encode(mAudioFrame,mVideoFrame);
 
-		mFrameEncoder->render(mVideoFrame);
+		mAudioFrame.zero();
+
+		mVideoDecoder->decode(mVideoFrame,mAudioFrame);
+
+		//mAudioWriterNode->write(mAudioFrame);
 	}
 
 	mFrameEncodeTimer.stop();
@@ -103,12 +146,12 @@ void EstudoSinalRFApp::draw()
 	drawFrame(
 		mVideoFrame,
 		mVideoFrame->getBounds(),
-		Rectf(mVideoFrame->getBounds()).scaled(uvec2(mFrameEncoder->getBitPeriod(), mFrameEncoder->getFieldPeriod())));
+		Rectf(mVideoFrame->getBounds()).scaled(uvec2(mVideoEncoder->getBitPeriod(), mVideoEncoder->getLinePeriod())));
 
-	float readAvailable = static_cast<float>(mAudioInputNode->getAvailableSamples()) / mAudioInputNode->getCapacity();
-	float readProgress	= static_cast<float>(mAudioInputNode->getReadIndex()) / mAudioInputNode->getCapacity();
-	float writeProgress = static_cast<float>(mAudioInputNode->getWriteIndex()) / mAudioInputNode->getCapacity();
-	float cpuLoad = mFrameEncodeTimer.getSeconds();
+	float readAvailable = static_cast<float>(mAudioReaderNode->getAvailableSamples()) / mAudioReaderNode->getCapacitySamples();
+	float readProgress	= static_cast<float>(mAudioReaderNode->getReadIndex()) / mAudioReaderNode->getCapacitySamples();
+	float writeProgress = static_cast<float>(mAudioReaderNode->getWriteIndex()) / mAudioReaderNode->getCapacitySamples();
+	float cpuLoad = static_cast<float>(mFrameEncodeTimer.getSeconds());
 
 	Rectf barBounds(getWindowWidth() * 0.75f, 0.0f, getWindowWidth(), 32.0f);
 	Color barColor(0.25f, 0.5f, 1.0f);
