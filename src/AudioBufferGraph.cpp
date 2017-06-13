@@ -233,7 +233,7 @@ void AudioBufferGraph::initShader()
 
 AudioBufferGraph::AudioBufferGraph(const audio::Buffer& buffer, const vector<string>& labels)
 	: mAudioBuffer(buffer)
-	, mLabels(labels.begin(), labels.begin() + min(mLabels.size(), buffer.getNumChannels()))
+	, mLabels(labels.begin(), labels.begin() + std::min(mLabels.size(), buffer.getNumChannels()))
 	, mFont("Courier New", 18.0f)
 {
 	mBuf.resize(2);

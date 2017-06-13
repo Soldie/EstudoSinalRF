@@ -130,6 +130,10 @@
     <ClInclude Include="..\include\DeviceRect.hpp" />
     <ClInclude Include="..\include\DeviceRectImpl.hpp" />
     <ClInclude Include="..\include\EstudoSinalRFApp.hpp" />
+    <ClInclude Include="..\include\PCMAdaptor.hpp" />
+    <ClInclude Include="..\include\PCMAdaptor\Audio.hpp" />
+    <ClInclude Include="..\include\PCMAdaptor\DSP.hpp" />
+    <ClInclude Include="..\include\PCMAdaptor\Video.hpp" />
     <ClInclude Include="..\include\Resources.h" />
     <ClInclude Include="..\include\RF.hpp" />
     <ClInclude Include="..\include\Testes.hpp" />

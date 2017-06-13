@@ -13,6 +13,9 @@
       <UniqueIdentifier>{67DA6AB6-F800-4c08-8B7A-83BB121AAD01}</UniqueIdentifier>
       <Extensions>rc;ico;cur;bmp;dlg;rc2;rct;bin;rgs;gif;jpg;jpeg;jpe;resx;tiff;tif;png;wav</Extensions>
     </Filter>
+    <Filter Include="Header Files\PCMAdaptor">
+      <UniqueIdentifier>{b58a85b1-bd82-446e-bfc9-d2f31701395d}</UniqueIdentifier>
+    </Filter>
   </ItemGroup>
   <ItemGroup>
     <ClCompile Include="..\src\EstudoSinalRFApp.cpp">
@@ -55,6 +58,18 @@
     </ClInclude>
     <ClInclude Include="..\include\Testes.hpp">
       <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="..\include\PCMAdaptor.hpp">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="..\include\PCMAdaptor\DSP.hpp">
+      <Filter>Header Files\PCMAdaptor</Filter>
+    </ClInclude>
+    <ClInclude Include="..\include\PCMAdaptor\Audio.hpp">
+      <Filter>Header Files\PCMAdaptor</Filter>
+    </ClInclude>
+    <ClInclude Include="..\include\PCMAdaptor\Video.hpp">
+      <Filter>Header Files\PCMAdaptor</Filter>
     </ClInclude>
   </ItemGroup>
   <ItemGroup>
