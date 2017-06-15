@@ -44,17 +44,10 @@ namespace PCMAdaptor
 		{
 		private:
 
-			///size_t bitDepth;
-			//size_t bitPeriod;
-			//size_t linePeriod;
-			//size_t samplesPerLine;
-			//size_t channels;
-			//ivec2 resolution;
-
 			Context* context;
 
 			std::vector<int16_t> samples; // para usar em conjunto com boost::crc
-			std::vector<float> field;
+			std::vector<float> symbols;
 			std::vector<float> frame;
 			boost::crc_16_type crc16;
 
@@ -90,31 +83,14 @@ namespace PCMAdaptor
 			Encoder(Context* context)
 				: context(context)
 			{
-				//bitDepth = 16u;
-				///bitPeriod = 5u;
-				//linePeriod = 2u;
-				//samplesPerLine = 3u;
-				//channels = 2u;
-				//resolution = ivec2(640, 490) / ivec2(bitPeriod, linePeriod); // 8 unidades de 16 bits
-
 				auto inputSize = context->getInputSize();
 				auto inputLength = context->getInputLength();
 				auto sampleCount = context->getSamplesPerLine();
 
 				samples.resize(sampleCount, 0u); // 3 amostras de 2ch = 6
-				field.resize(inputSize.x, 0.0f);
+				symbols.resize(inputSize.x, 0.0f);
 				frame.resize(inputLength);
 			}
-
-			//size_t getBitPeriod(){ return bitPeriod; }
-
-			//size_t getLinePeriod(){ return linePeriod; }
-
-			//size_t getSamplesPerField(){ return samplesPerLine; }
-
-			//size_t getChannels(){ return channels; }
-
-			//ivec2 getResolution(){ return resolution; }
 
 			bool process(const ci::audio::Buffer& audioFrame, gl::Texture2dRef videoFrame)
 			{
@@ -124,42 +100,46 @@ namespace PCMAdaptor
 				const auto* ch0 = audioFrame.getChannel(0u);
 				const auto* ch1 = audioFrame.getChannel(1u);
 
-				auto frameIter = frame.begin();
-
 				//vec2 _testPatternNextPos;
 
-				while (frameIter != frame.end())
+				std::vector<int16_t>::iterator sampleBeg, sampleEnd;
+				std::vector<float>::iterator symbolBeg, symbolEnd, frameBeg, frameEnd;
+
+				frameBeg = frame.begin();
+				frameEnd = frame.end();
+
+				static const uint8_t firstBits = 0x0A;
+				static const uint8_t lastBits = 0x78;
+
+				while (frameBeg != frameEnd)
 				{
 					// Converte amostras
-					auto sampleIter = samples.begin();
-					int16_t sampleInt = 0;
-					for (unsigned i = 0u; i < blocksPerLine; i++)
+					sampleBeg = samples.begin();
+					sampleEnd = samples.end();
+
+					while (sampleBeg != sampleEnd)
 					{
-						*sampleIter++ = sampleInt = floatToFixedS16(*ch0++);
-						*sampleIter++ = sampleInt = floatToFixedS16(*ch1++);
+						*sampleBeg++ = floatToFixedS16(*ch0++);
+						*sampleBeg++ = floatToFixedS16(*ch1++);
 					}
+
+					sampleBeg = samples.begin();
+					sampleEnd = samples.begin() + 6;
 
 					crc16.reset();
-					crc16.process_block(&*samples.begin(), &*(samples.end() - 1));
+					crc16.process_block(&*sampleBeg, &*(sampleEnd - 1));
+					uint16_t checksum = static_cast<uint16_t>(crc16.checksum());
 
 					// Escreve campo
-					sampleIter = samples.begin();
-					auto fieldIter = field.begin();
-
-					//static const uint16_t clockword = 0x5556;
-					//fieldIter = writeBits16(fieldIter, &clockword);
-
-					static const uint8_t firstBits = 0x0A;
-					fieldIter = writeBits8(fieldIter, &firstBits);
+					symbolBeg = writeBits8(symbols.begin(), &firstBits);
 
 					for (unsigned i = 0u; i < blocksPerLine; i++)
 					{
-						fieldIter = writeBits16(fieldIter, &*sampleIter++);
-						fieldIter = writeBits16(fieldIter, &*sampleIter++);
+						symbolBeg = writeBits16(symbolBeg, &*sampleBeg++);
+						symbolBeg = writeBits16(symbolBeg, &*sampleBeg++);
 					}
 					
-					uint16_t checksum = crc16.checksum();
-					fieldIter = writeBits16(fieldIter, &checksum);
+					symbolBeg = writeBits16(symbolBeg, &checksum);
 					
 					/*
 					for (unsigned i = 0u; i < blocksPerLine; i++)
@@ -168,24 +148,23 @@ namespace PCMAdaptor
 						{
 							for (unsigned k = 0; k < 16; k++)
 							{
-								*fieldIter++ = _testPatternNextPos.y;
+								*symbolBeg++ = _testPatternNextPos.y;
 							}
 						}
 					}
 
 					for (unsigned k = 0; k < 16; k++)
 					{
-						*fieldIter++ = _testPatternNextPos.y;
+						*symbolBeg++ = _testPatternNextPos.y;
 					}
 
 					_testPatternNextPos.y += 1.0f;
 					*/
 
-					static const uint8_t lastBits = 0x78;
-					fieldIter = writeBits8(fieldIter, &lastBits);
+					symbolBeg = writeBits8(symbolBeg, &lastBits);
 
 					// Preenche quadro;
-					frameIter = std::copy(field.begin(), field.end(), frameIter);
+					frameBeg = std::copy(symbols.begin(), symbols.end(), frameBeg);
 				}
 
 				videoFrame->update(frame.data(), GL_RED, GL_FLOAT, 0, outputSize.x, outputSize.y);
@@ -317,12 +296,7 @@ namespace PCMAdaptor
 		};
 
 
-
-
-
-
-
-		class BitSymbolValueParser
+		class SymbolValueParser
 		{
 		private:
 
@@ -331,7 +305,7 @@ namespace PCMAdaptor
 
 		public:
 
-			BitSymbolValueParser()
+			SymbolValueParser()
 				: value(0u)
 				, symbolMaxRead(16u)
 			{}
@@ -352,7 +326,7 @@ namespace PCMAdaptor
 				while (beg != end)
 				{
 					int bitIndex = std::distance(beg, end)-1;
-					value |= (*beg++ >= 0.5f ? 0 : 1) << bitIndex;
+					value |= (*beg++ < 0.5f ? 0 : 1) << bitIndex;
 				}
 
 				return end;
@@ -360,10 +334,6 @@ namespace PCMAdaptor
 
 			int16_t getLastValue(){ return value; }
 		};
-
-
-
-
 
 		class Decoder2
 		{
@@ -375,7 +345,8 @@ namespace PCMAdaptor
 
 			std::vector<float> symbols;
 			std::vector<int16_t> values;
-			BitSymbolValueParser symbolValueParser;
+			SymbolValueParser symbolValueParser;
+			boost::crc_16_type crc16;
 
 			static const int clockOffset = 4;
 			static const int blockOffset = 8; // clockOffset + 4;
@@ -409,6 +380,8 @@ namespace PCMAdaptor
 				
 				std::vector<float>::iterator symbolBeg, symbolEnd;
 				std::vector<int16_t>::iterator valueBeg, valueEnd;
+
+				uint16_t checksumRead, checksumCalc;
 				
 				while (chnIter.line())
 				{
@@ -416,13 +389,12 @@ namespace PCMAdaptor
 					valueBeg = values.begin();
 					valueEnd = values.begin() + 7;
 
-					// 16 simbolos = 16 bits!
+					// 16 simbolos de 1 bit.
 					symbolBeg = symbols.begin();
 					symbolEnd = symbols.begin() + 16;
 
 					while (chnIter.pixel())
 					{
-						// amostras
 						if (chnIter.mX >= blockOffset)
 						{
 							if (valueBeg != valueEnd)
@@ -440,18 +412,32 @@ namespace PCMAdaptor
 						}
 					}
 
-					uint16_t checksum = static_cast<uint16_t>(values.at(6));
-
-					//TODO: calcular checksum das amostras capturadas.
-					//TODO: replicar amostras anteriores caso checksum calculado seja incompativel com o checksum lido.
-
 					valueBeg = values.begin();
 					valueEnd = values.begin() + 6;
 
-					while (valueBeg != valueEnd)
+					crc16.reset();
+					crc16.process_block(&*valueBeg, &*(valueEnd-1));
+
+					checksumRead = static_cast<uint16_t>(*(values.end()-1));
+					checksumCalc = static_cast<uint16_t>(crc16.checksum());
+
+					//TODO: replicar amostras anteriores caso checksum calculado seja incompativel com o checksum lido.
+
+					if (checksumRead == checksumCalc)
 					{
-						*ch0++ = fixedS16toFloat(*valueBeg++);
-						*ch1++ = fixedS16toFloat(*valueBeg++);
+						while (valueBeg != valueEnd)
+						{
+							*ch0++ = fixedS16toFloat(*valueBeg++);
+							*ch1++ = fixedS16toFloat(*valueBeg++);
+						}
+					}
+					else
+					{
+						while (valueBeg != valueEnd)
+						{
+							*ch0++ = *ch1++ = 0.0f;
+							valueBeg += 2;
+						}
 					}
 				}
 			}
@@ -464,7 +450,7 @@ namespace PCMAdaptor
 				ivec2 inputSize = context->getInputSize();
 
 				gl::Texture2d::Format texFormat;
-				texFormat.internalFormat(GL_RG32F);
+				texFormat.internalFormat(GL_R32F);
 				texFormat.minFilter(GL_NEAREST);
 				texFormat.magFilter(GL_NEAREST);
 				texFormat.wrapS(GL_CLAMP_TO_BORDER);
@@ -472,11 +458,9 @@ namespace PCMAdaptor
 
 				mFrameBuffer = gl::Fbo::create(inputSize.x, inputSize.y, gl::Fbo::Format().colorTexture(texFormat));
 
-				//mFrameProgram = gl::GlslProg::create();
-
 				// Nota: Espaço suficiente para 32 unidades.
-				symbols.resize(32,100.0f);
-				values.resize(32,0);
+				symbols.resize(16,0.0f);
+				values.resize(7,0);
 			}
 
 			gl::FboRef getFramebuffer(){ return mFrameBuffer; }

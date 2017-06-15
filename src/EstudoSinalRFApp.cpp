@@ -15,7 +15,7 @@ void EstudoSinalRFApp::setup()
 	auto outputSize = mVideoContext->getOutputSize();
 
 	auto texFormat = gl::Texture2d::Format()
-		.internalFormat(GL_R32F)
+		.internalFormat(GL_RGBA32F)
 		.minFilter(GL_NEAREST)
 		.magFilter(GL_NEAREST)
 		.wrapS(GL_CLAMP_TO_BORDER)
