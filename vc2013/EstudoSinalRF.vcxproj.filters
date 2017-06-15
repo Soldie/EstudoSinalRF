@@ -71,6 +71,9 @@
     <ClInclude Include="..\include\PCMAdaptor\Video.hpp">
       <Filter>Header Files\PCMAdaptor</Filter>
     </ClInclude>
+    <ClInclude Include="..\include\PCMAdaptor\Context.hpp">
+      <Filter>Header Files\PCMAdaptor</Filter>
+    </ClInclude>
   </ItemGroup>
   <ItemGroup>
     <ResourceCompile Include="Resources.rc">

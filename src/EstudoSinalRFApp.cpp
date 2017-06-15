@@ -7,62 +7,25 @@ EstudoSinalRFApp::EstudoSinalRFApp()
 
 void EstudoSinalRFApp::setup()
 {
-	mVideoEncoder = std::make_shared<PCMAdaptor::Video::Encoder>();
+	mVideoContext = std::make_shared<PCMAdaptor::Context>();
+	mVideoEncoder = std::make_shared<PCMAdaptor::Video::Encoder>(mVideoContext.get());
+	mVideoDecoder = std::make_shared<PCMAdaptor::Video::Decoder2>(mVideoContext.get());
 
-	mVideoDecoder = std::make_shared<PCMAdaptor::Video::Decoder>();
+	auto inputSize = mVideoContext->getInputSize();
+	auto outputSize = mVideoContext->getOutputSize();
 
-	
-
-	mAudioFrame = ci::audio::Buffer(3u * 245u, 2u);
-
-	auto mVideoTexFormat = gl::Texture2d::Format()
+	auto texFormat = gl::Texture2d::Format()
 		.internalFormat(GL_R32F)
 		.minFilter(GL_NEAREST)
 		.magFilter(GL_NEAREST)
 		.wrapS(GL_CLAMP_TO_BORDER)
 		.wrapT(GL_CLAMP_TO_BORDER);
 
-	mVideoFrame = gl::Texture2d::create(
-		mVideoEncoder->getResolution().x,
-		mVideoEncoder->getResolution().y,
-		mVideoTexFormat);
+	mAudioFrame = ci::audio::Buffer(mVideoContext->getBlocksPerLine() * inputSize.y, mVideoContext->getChannels());
 
-	mVideoFbo = gl::Fbo::create(640, 490, gl::Fbo::Format().colorTexture(mVideoTexFormat));
+	mVideoFrame = gl::Texture2d::create(inputSize.x, inputSize.y, texFormat);
 
-	/*
-	auto printSignal = [](std::vector<float>& signal)
-	{
-		std::copy(signal.begin(), signal.end(), std::ostream_iterator<float>(std::cout));
-		std::cout << std::endl;
-	};
-
-	std::vector<float> signal(64,0.0f);
-	for (auto level = signal.begin(); level != signal.end(); level++)
-	{
-		size_t n = std::distance(signal.begin(), level);
-		*level = static_cast<float>(std::min(std::max((n / 4u) % 2u, 0u), 1u));
-	}
-	printSignal(signal);
-
-	PCMAdaptor::ClockParser clockParser;
-	PCMAdaptor::ClockGenerator clockGenerator(16.0f);
-
-	clockGenerator.reset();
-	clockGenerator.triggerEnabled = false;
-	clockGenerator.process(&signal);
-	printSignal(signal);
-
-	clockGenerator.reset();
-	clockGenerator.triggerEnabled = true;
-	clockGenerator.process(&signal);
-	printSignal(signal);
-
-	clockGenerator.reset();
-	clockGenerator.triggerEnabled = false;
-	clockGenerator.process(&signal);
-	clockParser.reset();
-	clockParser.process(&signal);
-	*/
+	mVideoOutputFbo = gl::Fbo::create(outputSize.x, outputSize.y, gl::Fbo::Format().colorTexture(texFormat));
 
 	try
 	{
@@ -83,7 +46,7 @@ void EstudoSinalRFApp::setup()
 		mAudioInputNode = ctx->createInputDeviceNode(inputDevice, nodeFormat);
 		mAudioOutputNode = ctx->createOutputDeviceNode(outputDevice, nodeFormat);
 		mAudioReaderNode = ctx->makeNode<PCMAdaptor::Audio::ReaderNode>(nodeFormat);
-		mAudioWriterNode = ctx->makeNode<PCMAdaptor::Audio::WriterNode>(nodeFormat);
+		mAudioWriterNode = ctx->makeNode<PCMAdaptor::Audio::WriterNode>(nodeFormat.autoEnable(false));
 		mAudioInputNode >> mAudioReaderNode >> mAudioWriterNode >> mAudioOutputNode;
 
 		ctx->enable();
@@ -93,7 +56,7 @@ void EstudoSinalRFApp::setup()
 		console() << e.what() << endl;
 	}
 
-
+	mAudioEnableTimer.start();
 }
 
 void EstudoSinalRFApp::mouseDown(MouseEvent event)
@@ -103,33 +66,59 @@ void EstudoSinalRFApp::mouseDown(MouseEvent event)
 
 void EstudoSinalRFApp::update()
 {
-	mFrameEncodeTimer.start();
+	audio::Context* ctx = audio::Context::master();
 
-	if (mAudioReaderNode->getAvailableSeconds() > 0.1f)
+	/*
+	if (!mAudioEnableTimer.isStopped())
 	{
-		mAudioReaderNode->read(mAudioFrame);
-
-		mVideoEncoder->process(mAudioFrame,mVideoFrame);
-
-		//mAudioFrame.zero();
-
+		if (mAudioEnableTimer.getSeconds() > 1.0f)
 		{
-			gl::ScopedFramebuffer scpFbo(mVideoFbo);
-			gl::ScopedViewport scpViewport(vec2(), mVideoFbo->getSize());
-			gl::ScopedMatrices scpMatrices;
-			gl::ScopedColor scpColor;
-			gl::setMatricesWindow(mVideoFbo->getSize());
-			gl::clear();
-			uvec2 videoFrameScale(mVideoEncoder->getBitPeriod(), mVideoEncoder->getLinePeriod());
-			gl::draw(mVideoFrame, Rectf(mVideoFrame->getBounds()).scaled(videoFrameScale));
+			if (!ctx->isEnabled())
+			{
+				ctx->enable();
+				mAudioEnableTimer.stop();
+			}
+		}
+	}
+	*/
+
+	if (ctx->isEnabled())
+	{
+		mFrameEncodeTimer.start();
+
+		if (mAudioReaderNode->getAvailableSeconds() > 0.01f)
+		{
+			mAudioReaderNode->read(mAudioFrame);
+
+			//TODO: transformar entrada audio::Buffer para std::vector<float>
+
+			mVideoEncoder->process(mAudioFrame, mVideoFrame);
+
+			//TODO: transformar saída std::vector<float> para gl::Texture2d e retornar tamanho escrito
+
+			{
+				gl::ScopedFramebuffer scpFbo(mVideoOutputFbo);
+				gl::ScopedViewport scpViewport(mVideoOutputFbo->getSize());
+				gl::ScopedMatrices scpMatrices;
+				gl::ScopedColor scpColor;
+				gl::setMatricesWindow(mVideoOutputFbo->getSize());
+				gl::clear();
+				auto bitSize = mVideoContext->getBitSize();
+				gl::draw(mVideoFrame, Rectf(mVideoFrame->getBounds()).scaled(bitSize));
+			}
+
+			mVideoDecoder->process(mVideoOutputFbo->getColorTexture(), mAudioFrame);
+
+			if (!mAudioWriterNode->isEnabled())
+			{
+				mAudioWriterNode->enable();
+			}
+
+			mAudioWriterNode->write(mAudioFrame);
 		}
 
-		mVideoDecoder->process(mVideoFbo->getColorTexture(), mAudioFrame);
-
-		mAudioWriterNode->write(mAudioFrame);
+		mFrameEncodeTimer.stop();
 	}
-
-	mFrameEncodeTimer.stop();
 }
 
 void EstudoSinalRFApp::draw()
@@ -142,12 +131,13 @@ void EstudoSinalRFApp::draw()
 		float progress;
 	};
 
-	static auto draw = [&](ProgressBar& pg, Rectf bounds)
+	static auto drawProgressBar = [&](ProgressBar& pg, Rectf bounds)
 	{
-		gl::ScopedColor scpColor1(pg.color * 0.25f);
+		gl::ScopedColor scpColor;
+		gl::color(pg.color * 0.25f);
 		gl::drawSolidRect(bounds);
 		//gl::ScopedBlendAdditive scpBlendAdd;
-		gl::ScopedColor scpColor2(pg.color);
+		gl::color(pg.color);
 		gl::ScopedLineWidth scpLineWidth(1.0f);
 		gl::drawStrokedRect(bounds);
 		gl::drawLine(
@@ -156,17 +146,27 @@ void EstudoSinalRFApp::draw()
 		gl::drawString(pg.label, bounds.getUpperLeft(), pg.color);
 	};
 
-	static auto drawFrame = [&](gl::Texture2dRef tex, const Area& src, const Rectf& dst)
+	static auto drawTextureFrame = [&](gl::Texture2dRef tex, const Rectf& src, const Rectf& dst)
 	{
-		gl::ScopedColor scpColor1(Color::white());
-		gl::draw(tex, src, dst);
+		gl::ScopedColor scpColor;
+		gl::color(Color::white());
+		gl::draw(tex, Area(src), dst);
 		gl::ScopedBlendAdditive scpBlendAdd;
 		gl::drawStrokedRect(dst);
 	};
 
 	gl::clear();
-	gl::Texture2dRef videoFboTex = mVideoFbo->getColorTexture();
-	drawFrame(videoFboTex,videoFboTex->getBounds(),videoFboTex->getBounds());
+
+	auto videoFrameTex = gl::Texture2dRef();
+	auto videoBoundsDst = Rectf();
+		
+	videoFrameTex = mVideoOutputFbo->getColorTexture();
+	videoBoundsDst = videoFrameTex->getBounds();
+	drawTextureFrame(videoFrameTex, videoFrameTex->getBounds(), videoBoundsDst);
+
+	videoFrameTex = mVideoDecoder->getFramebuffer()->getColorTexture();
+	videoBoundsDst = videoFrameTex->getBounds().getOffset(videoBoundsDst.getUpperRight());
+	drawTextureFrame(videoFrameTex, videoFrameTex->getBounds(), videoBoundsDst);
 
 	float iBufferAvailable = static_cast<float>(mAudioReaderNode->getAvailableSamples()) / mAudioReaderNode->getCapacitySamples();
 	float iReadProgress	= static_cast<float>(mAudioReaderNode->getReadIndex()) / mAudioReaderNode->getCapacitySamples();
@@ -194,7 +194,7 @@ void EstudoSinalRFApp::draw()
 		Rectf nextBarBounds(getWindowWidth() * 0.75f, 0.0f, getWindowWidth(), 32.0f);
 		for (auto bar : progressBars)
 		{
-			draw(bar, nextBarBounds);
+			drawProgressBar(bar, nextBarBounds);
 			nextBarBounds.offset(vec2(0, bar.bounds.getHeight()));
 		}
 	}

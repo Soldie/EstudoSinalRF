@@ -132,6 +132,7 @@
     <ClInclude Include="..\include\EstudoSinalRFApp.hpp" />
     <ClInclude Include="..\include\PCMAdaptor.hpp" />
     <ClInclude Include="..\include\PCMAdaptor\Audio.hpp" />
+    <ClInclude Include="..\include\PCMAdaptor\Context.hpp" />
     <ClInclude Include="..\include\PCMAdaptor\DSP.hpp" />
     <ClInclude Include="..\include\PCMAdaptor\Video.hpp" />
     <ClInclude Include="..\include\Resources.h" />

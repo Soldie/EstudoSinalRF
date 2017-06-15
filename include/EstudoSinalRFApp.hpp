@@ -31,15 +31,19 @@ private:
 
 	audio::InputNodeRef								mAudioInputNode;
 	audio::OutputNodeRef							mAudioOutputNode;
+
 	std::shared_ptr<PCMAdaptor::Audio::ReaderNode>	mAudioReaderNode;
 	std::shared_ptr<PCMAdaptor::Audio::WriterNode>	mAudioWriterNode;
 	ci::audio::Buffer								mAudioFrame;
+
+	std::shared_ptr<PCMAdaptor::Context>			mVideoContext;
 	std::shared_ptr<PCMAdaptor::Video::Encoder>		mVideoEncoder;
-	std::shared_ptr<PCMAdaptor::Video::Decoder>		mVideoDecoder;
+	std::shared_ptr<PCMAdaptor::Video::Decoder2>	mVideoDecoder;
 	gl::Texture2dRef								mVideoFrame;
-	gl::FboRef										mVideoFbo;
+	gl::FboRef										mVideoOutputFbo;
 
 	ci::Timer										mFrameEncodeTimer;
+	ci::Timer										mAudioEnableTimer;
 
 public:
 

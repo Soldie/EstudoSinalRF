@@ -12,6 +12,7 @@ namespace PCMAdaptor
 		{
 		public:
 			virtual ~Processor() = default;
+			virtual void reset() = 0;
 			virtual void process(std::vector<float>* buffer) = 0;
 		};
 
@@ -40,6 +41,8 @@ namespace PCMAdaptor
 				, threshold(threshold)
 				, state(0)
 			{}
+
+			void reset(){}
 
 			void process(std::vector<float>* buffer)
 			{
@@ -195,8 +198,6 @@ namespace PCMAdaptor
 			float mFrequency;
 			float mPhase;
 			float mTime;
-			//std::array<float,2> mSamples;
-			//bool fillFirstSample;
 
 		public:
 
