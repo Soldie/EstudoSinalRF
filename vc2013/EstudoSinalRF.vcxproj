@@ -129,6 +129,7 @@
     <ClInclude Include="..\include\AudioBufferGraph.hpp" />
     <ClInclude Include="..\include\DeviceRect.hpp" />
     <ClInclude Include="..\include\DeviceRectImpl.hpp" />
+    <ClInclude Include="..\include\DTMF.hpp" />
     <ClInclude Include="..\include\EstudoSinalRFApp.hpp" />
     <ClInclude Include="..\include\PCMAdaptor.hpp" />
     <ClInclude Include="..\include\PCMAdaptor\Audio.hpp" />

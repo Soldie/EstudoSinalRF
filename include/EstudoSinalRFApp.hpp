@@ -22,31 +22,38 @@ public:
 	EstudoSinalRFApp();
 	void setup() override;
 	void mouseDown(MouseEvent event) override;
+	void keyDown(KeyEvent event) override;
 	void update() override;
 	void draw() override;
+	void resize() override;
 
 private:
 
-	unique_ptr<DeviceRect> mDeviceRect;
+	void initShaders();
+
+	std::shared_ptr<DeviceRect>						mDeviceRect;
 
 	audio::InputNodeRef								mAudioInputNode;
 	audio::OutputNodeRef							mAudioOutputNode;
-
 	std::shared_ptr<PCMAdaptor::Audio::ReaderNode>	mAudioReaderNode;
 	std::shared_ptr<PCMAdaptor::Audio::WriterNode>	mAudioWriterNode;
 	ci::audio::Buffer								mAudioFrame;
-
+	std::vector<float>								mAudioBuffer;
+	
 	std::shared_ptr<PCMAdaptor::Context>			mVideoContext;
-	std::shared_ptr<PCMAdaptor::Video::Encoder>		mVideoEncoder;
+	std::shared_ptr<PCMAdaptor::Video::Encoder2>	mVideoEncoder;
 	std::shared_ptr<PCMAdaptor::Video::Decoder2>	mVideoDecoder;
 	gl::Texture2dRef								mVideoFrame;
-	gl::FboRef										mVideoOutputFbo;
+	std::vector<float>								mVideoBuffer;
+
+	gl::GlslProgRef									mVideoMonitorProg;
 
 	ci::Timer										mFrameEncodeTimer;
 	ci::Timer										mAudioEnableTimer;
 
 public:
 
+	void drawFrame(gl::Texture2dRef tex, const Rectf& src, const Rectf& dst);
 	DeviceRect* getDeviceRect(){ return mDeviceRect.get(); }
 
 };

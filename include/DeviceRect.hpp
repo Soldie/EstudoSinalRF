@@ -15,4 +15,6 @@ public:
 
 	virtual ci::gl::VboRef getIndices() = 0;
 
+	virtual ci::gl::VaoRef getVao() = 0;
+
 };

@@ -49,6 +49,14 @@ namespace PCMAdaptor
 			{
 				return mRingBuffer.empty() ? 0u : getCapacitySamples() / mSamplesPerSecond;
 			}
+
+			void clear()
+			{
+				for (auto rb = mRingBuffer.begin(); rb != mRingBuffer.end(); rb++)
+				{
+					rb->clear();
+				}
+			}
 		};
 
 		class ReaderNode
@@ -67,6 +75,16 @@ namespace PCMAdaptor
 				{
 					(*rb).resize(mSamplesPerSecond * mCapacitySeconds);
 				}
+			}
+
+			void enableProcessing() override
+			{
+				clear();
+			}
+
+			void disableProcessing() override
+			{
+
 			}
 
 			void process(ci::audio::Buffer* buffer) override
@@ -115,6 +133,16 @@ namespace PCMAdaptor
 				{
 					(*rb).resize(mSamplesPerSecond * mCapacitySeconds);
 				}
+			}
+
+			void enableProcessing() override
+			{
+				clear();
+			}
+
+			void disableProcessing() override
+			{
+
 			}
 
 			void process(ci::audio::Buffer* buffer) override

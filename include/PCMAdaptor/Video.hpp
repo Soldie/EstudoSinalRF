@@ -10,293 +10,19 @@ using namespace glm;
 
 namespace PCMAdaptor
 {
-	static int16_t floatToFixedS16(float value)
-	{
-		return static_cast<int16_t>(32767.0f * value);
-	}
-
-	static float fixedS16toFloat(int16_t value)
-	{
-		return static_cast<float>(value) / 32767.0f;
-	}
-
 	namespace Video
 	{
-		//class Frame
-		//class AudioFrame
-		//class VideoFrame
-		//class Context
-		//TODO: BufferToTexture  (View)
-		//bool process(const Frame& input, Frame& output) = 0;
-
-		//class AudioVideoAdapter
-		//class VideoAudioAdapter
-
-		/*
-		class Frame
+		static int16_t floatToFixedS16(float value)
 		{
-		virtual void read(std::vector<float>* buffer) = 0;
-		virtual void write(std::vector<float>* buffer) = 0;
-		};
-		*/
+			return static_cast<int16_t>(32767.0f * value);
+		}
 
-		class Encoder
+		static float fixedS16toFloat(int16_t value)
 		{
-		private:
+			return static_cast<float>(value) / 32767.0f;
+		}
 
-			Context* context;
-
-			std::vector<int16_t> samples; // para usar em conjunto com boost::crc
-			std::vector<float> symbols;
-			std::vector<float> frame;
-			boost::crc_16_type crc16;
-
-			static std::vector<float>::iterator writeBits(std::vector<float>::iterator beg, size_t count, float lo, float hi, const void* data)
-			{
-				auto end = beg + count;
-
-				//auto bitShift = std::distance(beg, end); // a partir do MSB
-
-				const uint64_t& value = *reinterpret_cast<const uint64_t*>(data);
-
-				while (beg != end)
-				{
-					int nextBit = std::distance(beg, end) - 1;
-					*beg++ = ((value >> nextBit) & 0x1) ? hi : lo;
-				}
-
-				return end;
-			}
-
-			static std::vector<float>::iterator writeBits16(std::vector<float>::iterator beg, const void* data)
-			{
-				return writeBits(beg, 16, 0.0f, 1.0f, data);
-			}
-
-			static std::vector<float>::iterator writeBits8(std::vector<float>::iterator beg, const void* data)
-			{
-				return writeBits(beg, 8, 0.0f, 1.0f, data);
-			}
-
-		public:
-
-			Encoder(Context* context)
-				: context(context)
-			{
-				auto inputSize = context->getInputSize();
-				auto inputLength = context->getInputLength();
-				auto sampleCount = context->getSamplesPerLine();
-
-				samples.resize(sampleCount, 0u); // 3 amostras de 2ch = 6
-				symbols.resize(inputSize.x, 0.0f);
-				frame.resize(inputLength);
-			}
-
-			bool process(const ci::audio::Buffer& audioFrame, gl::Texture2dRef videoFrame)
-			{
-				const auto outputSize = context->getInputSize();
-				const auto blocksPerLine = context->getBlocksPerLine();
-
-				const auto* ch0 = audioFrame.getChannel(0u);
-				const auto* ch1 = audioFrame.getChannel(1u);
-
-				//vec2 _testPatternNextPos;
-
-				std::vector<int16_t>::iterator sampleBeg, sampleEnd;
-				std::vector<float>::iterator symbolBeg, symbolEnd, frameBeg, frameEnd;
-
-				frameBeg = frame.begin();
-				frameEnd = frame.end();
-
-				static const uint8_t firstBits = 0x0A;
-				static const uint8_t lastBits = 0x78;
-
-				while (frameBeg != frameEnd)
-				{
-					// Converte amostras
-					sampleBeg = samples.begin();
-					sampleEnd = samples.end();
-
-					while (sampleBeg != sampleEnd)
-					{
-						*sampleBeg++ = floatToFixedS16(*ch0++);
-						*sampleBeg++ = floatToFixedS16(*ch1++);
-					}
-
-					sampleBeg = samples.begin();
-					sampleEnd = samples.begin() + 6;
-
-					crc16.reset();
-					crc16.process_block(&*sampleBeg, &*(sampleEnd - 1));
-					uint16_t checksum = static_cast<uint16_t>(crc16.checksum());
-
-					// Escreve campo
-					symbolBeg = writeBits8(symbols.begin(), &firstBits);
-
-					for (unsigned i = 0u; i < blocksPerLine; i++)
-					{
-						symbolBeg = writeBits16(symbolBeg, &*sampleBeg++);
-						symbolBeg = writeBits16(symbolBeg, &*sampleBeg++);
-					}
-					
-					symbolBeg = writeBits16(symbolBeg, &checksum);
-					
-					/*
-					for (unsigned i = 0u; i < blocksPerLine; i++)
-					{
-						for (unsigned j = 0u; j < context->getChannels(); j++)
-						{
-							for (unsigned k = 0; k < 16; k++)
-							{
-								*symbolBeg++ = _testPatternNextPos.y;
-							}
-						}
-					}
-
-					for (unsigned k = 0; k < 16; k++)
-					{
-						*symbolBeg++ = _testPatternNextPos.y;
-					}
-
-					_testPatternNextPos.y += 1.0f;
-					*/
-
-					symbolBeg = writeBits8(symbolBeg, &lastBits);
-
-					// Preenche quadro;
-					frameBeg = std::copy(symbols.begin(), symbols.end(), frameBeg);
-				}
-
-				videoFrame->update(frame.data(), GL_RED, GL_FLOAT, 0, outputSize.x, outputSize.y);
-
-				return true;
-			}
-		};
-
-		class Decoder
-		{
-		private:
-
-			Context* context;
-			std::vector<float> signal;
-			std::vector<float> clock;
-
-			void resizeBuffers(size_t length)
-			{
-				signal.resize(length);
-				clock.resize(length);
-			}
-
-			void printBuffer(std::vector<float>::iterator beg, std::vector<float>::iterator end)
-			{
-				std::copy(beg, end, std::ostream_iterator<float>(std::cout));
-				std::cout << std::endl;
-			};
-
-			void makeCopy(ci::Channel32f::Iter& channelIter)
-			{
-				auto signalIter = signal.begin();
-				while (channelIter.pixel() || signalIter != signal.end())
-				{
-					*signalIter++ = channelIter.v();
-				}
-			};
-
-			void makeClock()
-			{
-				//DSP::ClockParser clockParser;
-				//clockParser.process(&signal);
-
-				//TODO: DSP::Oscillator e depois DSP::SquareGenerator
-				//DSP::ClockOscillator clockOscillator(static_cast<float>(clockParser.getLockedPeriod() * 2u), 0.85f);
-
-				DSP::ClockOscillator clockOscillator(5.0f * 2.0f, 0.85f);
-				clockOscillator.process(&clock);
-
-				//printBuffer(clock.begin(), clock.begin() + 64);
-
-				DSP::SchmittTrigger schmittTrigger(DSP::SchmittTrigger::Level{ 0.00f, 1.00f }, DSP::SchmittTrigger::Level{ 0.25f, 0.85f });
-				schmittTrigger.process(&clock);
-
-				DSP::EdgeTrigger edgeTrigger;
-				edgeTrigger.process(&clock);
-
-				//printBuffer(clock.begin(), clock.begin() + 64);
-				//printBuffer(signal.begin(), signal.begin() + 64);
-			};
-
-			void makeDecode()
-			{
-				auto clockIter = clock.begin();
-				auto outputIter = signal.begin();
-
-				int nextBit = 0;
-
-				while (clockIter != clock.end())
-				{
-					bool clockBit = *clockIter > 0.5f;
-
-					if (clockBit)
-					{
-						// TODO: pegar constantes de um contexto
-						//nota: ler 96 bits (16 * 6) a partir do 8º disparo/bit
-
-						int value = 0;
-						int bitShift = context->getBitDepth();
-						int bitOffset = nextBit++ - 8;
-
-						if (bitOffset >= 0 && bitOffset < 96)
-						{
-							auto nextIndex = std::distance(clock.begin(), clockIter);
-							bool streamBit = signal.at(nextIndex) > 0.5f;
-							std::cout << streamBit;
-							//*outputIter++ = signal.at(std::distance(clock.begin(), clockIter));
-						}
-					}
-					clockIter++;
-				}
-				std::cout << std::endl;
-			};
-
-		public:
-
-			Decoder(Context* context)
-				: context(context)
-			{
-
-			}
-
-			bool process(const gl::Texture2dRef input, ci::audio::Buffer& output)
-			{
-				if (!input || output.isEmpty())
-				{
-					return false;
-				}
-
-				output.zero();
-
-				ci::Surface32f surface(input->createSource());
-
-				if (signal.size() != surface.getWidth())
-				{
-					resizeBuffers(surface.getWidth());
-				}
-
-				ci::Channel32f::Iter channelIter = surface.getChannelRed().getIter();
-
-				while (channelIter.line())
-				{
-					makeCopy(channelIter);
-					makeClock();
-					makeDecode();
-				}
-
-				return true;
-			}
-		};
-
-
-		class SymbolValueParser
+		class SymbolValueReader
 		{
 		private:
 
@@ -305,7 +31,7 @@ namespace PCMAdaptor
 
 		public:
 
-			SymbolValueParser()
+			SymbolValueReader()
 				: value(0u)
 				, symbolMaxRead(16u)
 			{}
@@ -313,8 +39,6 @@ namespace PCMAdaptor
 			std::vector<float>::iterator operator()(std::vector<float>::iterator beg, std::vector<float>::iterator end)
 			{
 				value = 0u;
-
-				//std::memset(&value,0,sizeof value);
 
 				int symbolsAvailable = std::distance(beg, end);
 
@@ -335,45 +59,237 @@ namespace PCMAdaptor
 			int16_t getLastValue(){ return value; }
 		};
 
+		class Encoder2
+		{
+		private:
+
+			Context*				context;
+			gl::FboRef				mFrameBuffer;
+			gl::Texture2dRef		mFrameInput;
+			gl::PboRef				mFramePboPack;
+			std::vector<int16_t>	samples;
+			std::vector<float>		symbols;
+			std::vector<float>		frame;
+			boost::crc_16_type		crc16;
+
+			static std::vector<float>::iterator writeBits(std::vector<float>::iterator beg, size_t count, float lo, float hi, const void* data)
+			{
+				auto end = beg + count;
+
+				const uint64_t& value = *reinterpret_cast<const uint64_t*>(data);
+
+				while (beg != end)
+				{
+					int nextBit = std::distance(beg, end) - 1;
+					*beg++ = ((value >> nextBit) & 0x1) ? hi : lo;
+				}
+
+				return end;
+			}
+
+			std::vector<float>::iterator writeBits16(std::vector<float>::iterator beg, const void* data)
+			{
+				return writeBits(beg, 16, 0.0f, 1.0f, data);
+			}
+
+			std::vector<float>::iterator writeBits8(std::vector<float>::iterator beg, const void* data)
+			{
+				return writeBits(beg, 8, 0.0f, 1.0f, data);
+			}
+
+		public:
+
+			Encoder2(Context* context) : context(context)
+			{
+				auto inputSize = context->getInputSize();
+				auto inputLength = context->getInputLength();
+				auto outputSize = context->getOutputSize();
+				auto outputLength = context->getOutputLength();
+				auto samplesPerLine = context->getSamplesPerLine();
+				
+				gl::Texture2d::Format texFormat;
+				texFormat.internalFormat(GL_R32F);
+				texFormat.minFilter(GL_NEAREST);
+				texFormat.magFilter(GL_NEAREST);
+				texFormat.wrapS(GL_CLAMP_TO_BORDER);
+				texFormat.wrapT(GL_CLAMP_TO_BORDER);
+
+				mFrameInput = gl::Texture2d::create(inputSize.x, inputSize.y, texFormat);
+				mFrameBuffer = gl::Fbo::create(outputSize.x, outputSize.y, gl::Fbo::Format().colorTexture(texFormat));
+				mFramePboPack = gl::Pbo::create(GL_PIXEL_PACK_BUFFER, outputLength*sizeof(float),nullptr,GL_DYNAMIC_DRAW);
+
+				samples.resize(samplesPerLine, 0u);
+				symbols.resize(inputSize.x, 0.0f);
+				frame.resize(inputLength);
+			}
+
+			void makeOutput(std::vector<float>& output)
+			{
+				// Cópia de entrada
+				mFrameInput->update(
+					frame.data(), 
+					GL_RED, 
+					GL_FLOAT, 
+					0, 
+					mFrameInput->getWidth(),
+					mFrameInput->getHeight());
+
+				// Redimensionamento
+				{
+					gl::ScopedFramebuffer scpFbo(mFrameBuffer);
+					gl::ScopedViewport scpViewport(mFrameBuffer->getSize());
+					gl::ScopedMatrices scpMatrices;
+					gl::ScopedColor scpColor;
+					gl::setMatricesWindow(mFrameBuffer->getSize());
+					gl::clear();
+
+					const auto bitSize = context->getBitSize();
+
+					if (mFrameInput)
+					{
+						gl::draw(mFrameInput, Rectf(mFrameInput->getBounds()).scaled(bitSize));
+					}
+				}
+
+				// Cópia de saída
+				if (mFramePboPack)
+				{
+					auto fboTex = mFrameBuffer->getColorTexture();
+					gl::ScopedTextureBind scpFboTex(fboTex);
+					gl::ScopedBuffer scpPbo(mFramePboPack);
+					glGetTexImage(GL_TEXTURE_2D, 0, GL_RED, GL_FLOAT, 0);
+
+					float* ptr = static_cast<float*>(mFramePboPack->map(GL_READ_ONLY));
+
+					if (ptr)
+					{
+						size_t length = fboTex->getWidth() * fboTex->getHeight();
+						length = std::max(length, output.size());
+						std::copy(ptr, ptr + length, output.begin());
+						mFramePboPack->unmap();
+					}
+				}
+			}
+
+			void makeEncode(const std::vector<float>& input)
+			{
+				const auto blocksPerLine = context->getBlocksPerLine();
+
+				const auto* audioInputPtr = input.data();
+
+				std::vector<int16_t>::iterator sampleBeg, sampleEnd;
+				std::vector<float>::iterator symbolBeg, symbolEnd, frameBeg, frameEnd;
+
+				frameBeg = frame.begin();
+				frameEnd = frame.end();
+
+				static const uint8_t firstBits = 0x0A;
+				static const uint8_t lastBits = 0x78;
+				static const uint8_t zero = 0;
+
+				uint8_t clockH;
+				uint8_t clockV;
+				uint8_t parity = 0;
+				uint16_t checksum;
+
+				while (frameBeg != frameEnd)
+				{
+					// Converte amostras
+					sampleBeg = samples.begin();
+					sampleEnd = samples.end();
+
+					while (sampleBeg != sampleEnd)
+					{
+						*sampleBeg++ = floatToFixedS16(*audioInputPtr++);
+						*sampleBeg++ = floatToFixedS16(*audioInputPtr++);
+					}
+
+					sampleBeg = samples.begin();
+					sampleEnd = samples.begin() + 6;
+
+					crc16.reset();
+					crc16.process_block(&*sampleBeg, &*(sampleEnd - 1));
+
+					clockH = 0xA;
+					clockV = parity++ % 2 ? 0x0 : 0x1;
+					checksum = crc16.checksum();
+
+					// Escreve campo
+					symbolBeg = symbols.begin();
+					symbolBeg = writeBits(symbolBeg, 4, 0.00f, 0.00f, &zero);
+					symbolBeg = writeBits(symbolBeg, 4, 0.25f, 0.85f, &clockH);
+
+					while (sampleBeg != sampleEnd)
+					{
+						symbolBeg = writeBits(symbolBeg, 16, 0.25f, 0.85f, &*sampleBeg++);
+						symbolBeg = writeBits(symbolBeg, 16, 0.25f, 0.85f, &*sampleBeg++);
+					}
+
+					symbolBeg = writeBits(symbolBeg, 16, 0.25f, 0.85f, &checksum);
+					symbolBeg = writeBits(symbolBeg, 1, 0.25f, 0.85f, &clockV);
+					symbolBeg = writeBits(symbolBeg, 3, 1.00f, 1.00f, &zero);
+					symbolBeg = writeBits(symbolBeg, 4, 0.00f, 0.00f, &zero);
+
+					// Preenche quadro;
+					frameBeg = std::copy(symbols.begin(), symbols.end(), frameBeg);
+				}
+			}
+
+			bool process(const std::vector<float>& input, std::vector<float>& output)
+			{
+				if (mFrameBuffer)
+				{
+					makeEncode(input);
+					makeOutput(output);
+					return true;
+				}
+				return false;
+			}
+		};
+
+
 		class Decoder2
 		{
 		private:
 
-			Context* context;
-			gl::FboRef mFrameBuffer;
-			gl::GlslProgRef mFrameProgram;
-
-			std::vector<float> symbols;
-			std::vector<int16_t> values;
-			SymbolValueParser symbolValueParser;
-			boost::crc_16_type crc16;
+			Context*				context;
+			gl::FboRef				mFrameBuffer;
+			gl::Texture2dRef		mFrameInput;
+			gl::PboRef				mFramePboUnpack;
+			std::vector<int16_t>	values;
+			std::vector<float>		symbols;
+			SymbolValueReader		symbolValueReader;
+			boost::crc_16_type		crc16;
 
 			static const int clockOffset = 4;
 			static const int blockOffset = 8; // clockOffset + 4;
 			static const int crc16Offset = 104;	// blockOffset + 96;
 			static const int whiteRefOffset = 120;	// crc16Offset + 16;
 
-			void makeCopy(const gl::Texture2dRef input)
+			void makeInput(const std::vector<float>& input)
 			{
-				gl::ScopedFramebuffer scpFbo(mFrameBuffer);
-				gl::ScopedViewport scpViewport(mFrameBuffer->getSize());
-				gl::ScopedMatrices scpMatrices;
-				gl::ScopedColor scpColor;
-				gl::setMatricesWindow(mFrameBuffer->getSize(), false); // <== Nota: Invertido!
-				gl::clear();
+				mFrameInput->update(
+					input.data(),
+					GL_RED,
+					GL_FLOAT,
+					0,
+					mFrameInput->getWidth(),
+					mFrameInput->getHeight());
 
-				if (input)
 				{
-					gl::draw(input, input->getBounds(), mFrameBuffer->getBounds());
+					gl::ScopedFramebuffer scpFbo(mFrameBuffer);
+					gl::ScopedViewport scpViewport(mFrameBuffer->getSize());
+					gl::ScopedMatrices scpMatrices;
+					gl::ScopedColor scpColor;
+					gl::setMatricesWindow(mFrameBuffer->getSize());
+					gl::clear();
+					gl::draw(mFrameInput, mFrameInput->getBounds(), mFrameBuffer->getBounds());
 				}
 			}
 
-			void makeDecode(ci::audio::Buffer& output)
+			void makeDecode(std::vector<float>& output)
 			{
-				output.zero();
-
-				auto* ch0 = output.getChannel(0u);
-				auto* ch1 = output.getChannel(1u);
+				auto* audioBufferPtr = output.data();
 
 				ci::Surface32f surface(mFrameBuffer->getColorTexture()->createSource());
 				ci::Surface32f::Iter chnIter = surface.getIter();
@@ -399,14 +315,13 @@ namespace PCMAdaptor
 						{
 							if (valueBeg != valueEnd)
 							{
-								float symbolRead = chnIter.r();
-								*symbolBeg++ = symbolRead;
+								*symbolBeg++ = chnIter.r();
+
 								if (symbolBeg == symbolEnd)
 								{
 									symbolBeg = symbols.begin();
-									symbolValueParser(symbolBeg, symbolEnd);
-									int16_t valueRead = symbolValueParser.getLastValue();
-									*valueBeg++ = valueRead;
+									symbolValueReader(symbolBeg, symbolEnd);
+									*valueBeg++ = symbolValueReader.getLastValue();
 								}
 							}
 						}
@@ -421,21 +336,24 @@ namespace PCMAdaptor
 					checksumRead = static_cast<uint16_t>(*(values.end()-1));
 					checksumCalc = static_cast<uint16_t>(crc16.checksum());
 
-					//TODO: replicar amostras anteriores caso checksum calculado seja incompativel com o checksum lido.
+					bool checksumOk = checksumRead == checksumCalc;
 
-					if (checksumRead == checksumCalc)
+					//TODO: preencher com amostras anteriores caso checksum seja incompativel.
+
+					if (checksumOk)
 					{
 						while (valueBeg != valueEnd)
 						{
-							*ch0++ = fixedS16toFloat(*valueBeg++);
-							*ch1++ = fixedS16toFloat(*valueBeg++);
+							*audioBufferPtr++ = fixedS16toFloat(*valueBeg++);
+							*audioBufferPtr++ = fixedS16toFloat(*valueBeg++);
 						}
 					}
 					else
 					{
 						while (valueBeg != valueEnd)
 						{
-							*ch0++ = *ch1++ = 0.0f;
+							*audioBufferPtr++ = 
+							*audioBufferPtr++ = 0.0f;
 							valueBeg += 2;
 						}
 					}
@@ -447,7 +365,10 @@ namespace PCMAdaptor
 			Decoder2(Context* context)
 				: context(context)
 			{
-				ivec2 inputSize = context->getInputSize();
+				auto inputSize = context->getInputSize();
+				//auto inputLength = context->getInputLength();
+				auto outputSize = context->getOutputSize();
+				//auto outputLength = context->getOutputLength();
 
 				gl::Texture2d::Format texFormat;
 				texFormat.internalFormat(GL_R32F);
@@ -455,21 +376,23 @@ namespace PCMAdaptor
 				texFormat.magFilter(GL_NEAREST);
 				texFormat.wrapS(GL_CLAMP_TO_BORDER);
 				texFormat.wrapT(GL_CLAMP_TO_BORDER);
+				texFormat.label("Decoder input");
 
+				mFrameInput = gl::Texture2d::create(outputSize.x, outputSize.y, texFormat);
+				mFrameInput->setTopDown(true);
 				mFrameBuffer = gl::Fbo::create(inputSize.x, inputSize.y, gl::Fbo::Format().colorTexture(texFormat));
 
-				// Nota: Espaço suficiente para 32 unidades.
-				symbols.resize(16,0.0f);
-				values.resize(7,0);
+				symbols.resize(16, 0.0f);
+				values.resize(7, 0);
 			}
 
-			gl::FboRef getFramebuffer(){ return mFrameBuffer; }
+			const gl::Texture2dRef getProcessedTexture(){ return mFrameBuffer->getColorTexture(); }
 			
-			bool process(const gl::Texture2dRef input, ci::audio::Buffer& output)
+			bool process(const std::vector<float>& input, std::vector<float>& output)
 			{
 				if (mFrameBuffer)
 				{
-					makeCopy(input);
+					makeInput(input);
 					makeDecode(output);
 					return true;
 				}
